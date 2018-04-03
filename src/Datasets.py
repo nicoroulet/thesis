@@ -4,7 +4,7 @@ import nibabel as nib
 import numpy as np
 import pickle
 
-import BatchGenerator
+from BatchGenerator import AsyncBatchGenerator, Transformations
 
 # Deprecate IBSR
 class IBSR(object):
@@ -171,72 +171,89 @@ class Dataset(object):
     self.val_paths = paths[-val_n:]
 
   @staticmethod
-  def load_path(self):
+  def normalize(X):
+    X -= np.mean(X)
+    X /= np.std(X)
+    return X
+
+  def load_path(self, path):
     raise NotImplementedError()
 
-  @staticmethod
   def _get_paths(self, root_path):
+    """ Get a meaningful path to each sample from the root path """
+    raise NotImplementedError()
+
+  def _get_data_path(self, path):
+    """ Given a meaningful path to a sample, get the exact path to the data. """
+    raise NotImplementedError()
+
+  def _get_seg_paths(self, path):
+    """ Given a meaningful path to a sample, get the exact path to the
+    segmentation. """
     raise NotImplementedError()
 
   def get_generators(self, patch_shape):
-    train_generator = BatchGenerator.AsyncBatchGenerator(patch_shape,
-                                                         self.train_paths,
-                                                         self.load_path)
-    val_generator = BatchGenerator.AsyncBatchGenerator(patch_shape,
-                                                       self.val_paths,
-                                                       self.load_path)
+    train_generator = AsyncBatchGenerator(patch_shape,
+                                          self.train_paths,
+                                          self.load_path)
+    val_generator = AsyncBatchGenerator(None,
+                                        self.val_paths,
+                                        self.load_path,
+                                        transformations=Transformations.NONE)
     return train_generator, val_generator
 
+class NiftiDataset(Dataset):
+  """ Dataset that loads files of NIFTI (.nii) format """
 
-class ATLAS(Dataset):
-
-  def __init__(self, root_path='../../data/ATLAS_R1.1/',
-               validation_portion=.2):
-    super(ATLAS, self).__init__(root_path, validation_portion)
-
-
-  @staticmethod
-  def load_path(path):
-    data_path = glob(path + '/*deface*')
-    assert(len(data_path) == 1)  # There should be exactly one deface per dir
-    data_path = data_path[0]
+  def load_path(self, path):
+    data_path = self._get_data_path(path)
     data = nib.load(data_path).get_data().astype('float32')
-    data = data.reshape(data.shape + (1,))
+    data = self.normalize(data.reshape(data.shape + (1,)))
 
-    seg_paths = glob(path + '/*LesionSmooth*')
+    seg_paths = self._get_seg_paths(path)
     seg = (sum(nib.load(path).get_data() for path in seg_paths) != 0).astype(
                                                                         'int8')
     seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
-  @staticmethod
-  def _get_paths(root_path):
+class ATLAS(NiftiDataset):
+
+  def __init__(self, root_path='../../data/ATLAS_R1.1/',
+               validation_portion=.2):
+    super(ATLAS, self).__init__(root_path, validation_portion)
+
+  def _get_data_path(self, path):
+    data_path = glob(path + '/*deface*')
+    assert(len(data_path) == 1)  # There should be exactly one deface per dir
+    data_path = data_path[0]
+    return data_path
+
+  def _get_seg_paths(self, path):
+    return glob(path + '/*LesionSmooth*')
+
+  def _get_paths(self, root_path):
     return glob(root_path + '*/*/*')
 
 
-class BraTS(Dataset):
+class BraTS(NiftiDataset):
 
   def __init__(self, root_path='../../data/MICCAI_BraTS17_Data_Training/',
                validation_portion=.2):
     super(BraTS, self).__init__(root_path, validation_portion)
 
-  @staticmethod
-  def load_path(path):
-    data_path = glob(path + '*t1.nii.gz')
-    assert(len(data_path) == 1)
+  def _get_data_path(self, path):
+    data_path = glob(path + '/*t1.nii.gz')
+    if len(data_path) != 1:
+      print(path, data_path)
+    assert(len(data_path) == 1)  # There should be exactly one deface per dir
     data_path = data_path[0]
-    data = nib.load(data_path).get_data().astype('float32')
-    data = data.reshape(data.shape + (1,))
+    return data_path
 
-    seg_paths = glob(path + '/*seg*')
-    seg = (sum(nib.load(path).get_data() for path in seg_paths) != 1).astype(
-                                                                        'int8')
-    seg = seg.reshape(seg.shape + (1,))
-    return (data, seg)
+  def _get_seg_paths(self, path):
+    return glob(path + '/*seg*')
 
-  @staticmethod
-  def _get_paths(root_path):
+  def _get_paths(self, root_path):
     # This merges Higher Grade Glioma (HGG) with Lower Grade Glioma (LGG).
     # That might not be ideal.
-    return glob('*/*')
+    return glob(root_path + '*/*')
 
