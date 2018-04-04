@@ -1,10 +1,11 @@
-import array2gif
 import numpy as np
 import matplotlib.pyplot as plt
 
 def write_gif(img3d, filename, fps=24):
   """ Writes the image to the given paths as a GIF, one frame per layer. """
-  to_rgb = [np.array([layer, layer, layer]).astype(int) // 100 for layer in img3d]
+  import array2gif
+  to_rgb = [np.array([layer, layer, layer]).astype(int) // 100
+            for layer in img3d]
   array2gif.write_gif(to_rgb, filename, fps=fps)
 
 class Timeline(object):
