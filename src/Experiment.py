@@ -20,7 +20,7 @@ tr_gen, val_gen = brats.get_generators(patch_shape,
 
 model = UNet.build_unet(n_classes, depth=net_depth)
 
-model.compile(loss='sparse_categorical_crossentropy',
+model.compile(loss=Metrics.sparse_dice_loss,#'sparse_categorical_crossentropy',
               optimizer='adam',
               metrics=['accuracy', Metrics.sparse_dice_coef])
 

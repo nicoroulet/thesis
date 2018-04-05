@@ -210,7 +210,8 @@ class Dataset(object):
     val_generator = AsyncBatchGenerator(None,
                                         self.val_paths,
                                         self.load_path,
-                                        transformations=Transformations.NONE)
+                                        transformations=Transformations.NONE,
+                                        patch_multiplicity=patch_multiplicity)
     return train_generator, val_generator
 
 class NiftiDataset(Dataset):

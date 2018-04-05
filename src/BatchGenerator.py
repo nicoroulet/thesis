@@ -58,7 +58,7 @@ class BatchGenerator(object):
   def crop(self, X, Y):
     if not (self.transformations & Transformations.CROP):
       if self.patch_multiplicity > 1:
-        dwh = np.array(self.patch_shape).astype('int32')
+        dwh = np.array(X.shape[:-1]).astype('int32')
         dwh_cropped = (dwh // self.patch_multiplicity) * self.patch_multiplicity
         zxy1 = (dwh - dwh_cropped) // 2
         zxy2 = zxy1 + dwh_cropped
