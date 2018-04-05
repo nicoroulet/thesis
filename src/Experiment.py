@@ -22,7 +22,9 @@ model = UNet.build_unet(n_classes, depth=net_depth)
 
 model.compile(loss=Metrics.sparse_dice_loss,#'sparse_categorical_crossentropy',
               optimizer='adam',
-              metrics=['accuracy', Metrics.sparse_dice_coef])
+              metrics=['accuracy',
+                       Metrics.sparse_dice_coef,
+                       Metircs.sum_diff])
 
 print(model.summary())
 

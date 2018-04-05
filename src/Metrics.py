@@ -54,6 +54,9 @@ def sparse_dice_coef(y_true, y_pred):
   # fp_fn = K.sum(-corrects + 1)
   # return tp_dbl / (tp_dbl + fp_fn)
 
+def sum_diff(y_true, y_pred):
+  return K.sum(y_true) - K.sum(y_pred)
+
 def sparse_dice_loss(y_true, y_pred):
   return 1 - sparse_dice_coef(y_true, y_pred)
 
