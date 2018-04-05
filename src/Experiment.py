@@ -8,14 +8,17 @@ import os
 from keras.callbacks import ModelCheckpoint
 
 patch_shape = (64, 64, 64)
-atlas = Datasets.ATLAS()
-brats = Datasets.BraTS()
-tr_gen, val_gen = brats.get_generators(patch_shape)
-
 n_classes = 2
+net_depth = 4
 savefile = 'weights.h5'
 
-model = UNet.build_unet(n_classes, depth=4)
+atlas = Datasets.ATLAS()
+brats = Datasets.BraTS()
+tr_gen, val_gen = brats.get_generators(patch_shape,
+                                       patch_multiplicity=(1<<(net_depth-1)))
+
+
+model = UNet.build_unet(n_classes, depth=net_depth)
 
 model.compile(loss='sparse_categorical_crossentropy',
               optimizer='adam',

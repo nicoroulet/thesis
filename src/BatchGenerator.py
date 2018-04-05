@@ -17,7 +17,8 @@ class BatchGenerator(object):
   def __init__(self,
                dataset,
                patch_shape,
-               transformations=Transformations.ALL):
+               transformations=Transformations.ALL,
+               patch_multiplicity=1):
     """ Initialize batch generator.
     Args:
         dataset: object that contains X_train, Y_train, X_val, Y_val
@@ -26,6 +27,7 @@ class BatchGenerator(object):
     self.dataset = dataset
     self.patch_shape = patch_shape
     self.transformations = transformations
+    self.patch_multiplicity = patch_multiplicity
 
   @staticmethod
   def get_voxel_of_rand_label(Y):
@@ -55,6 +57,15 @@ class BatchGenerator(object):
 
   def crop(self, X, Y):
     if not (self.transformations & Transformations.CROP):
+      if self.patch_multiplicity > 1:
+        dwh = np.array(self.patch_shape).astype('int32')
+        dwh_cropped = (dwh // self.patch_multiplicity) * self.patch_multiplicity
+        zxy1 = (dwh - dwh_cropped) // 2
+        zxy2 = zxy1 + dwh_cropped
+        z1,x1,y1 = zxy1
+        z2,x2,y2 = zxy2
+        return (X[z1:z2, x1:x2, y1:y2, :],
+                Y[z1:z2, x1:x2, y1:y2, :])
       return X, Y
     contained_voxel = self.get_voxel_of_rand_label(Y)
     x1, x2, y1, y2, z1, z2 = self.generate_cuboid(X.shape[:-1], contained_voxel)
@@ -134,7 +145,8 @@ class AsyncBatchGenerator(BatchGenerator):
   """
 
   def __init__(self, patch_shape, paths, loader_function, max_queue_size=10,
-               pool_size=10, transformations=Transformations.ALL):
+               pool_size=10, transformations=Transformations.ALL,
+               patch_multiplicity=1):
     """ Initialize the thread that fetches objects in the queue.
 
     Args:
@@ -161,6 +173,7 @@ class AsyncBatchGenerator(BatchGenerator):
     # print('pool', len(self.pool))
     self.cycle = itertools.cycle(range(pool_size))
     self.transformations = transformations
+    self.patch_multiplicity = patch_multiplicity
 
   def generate_patches(self):
     while (True):

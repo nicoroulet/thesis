@@ -191,7 +191,16 @@ class Dataset(object):
     segmentation. """
     raise NotImplementedError()
 
-  def get_generators(self, patch_shape):
+  def get_generators(self, patch_shape, patch_multiplicity=1):
+    """ Get both training generator and validation generator.
+        The training generator crops images and applies augmentation,
+        the validation generator doesn't.
+    Args:
+        patch_shape: dimensions of the training patches.
+        patch_multiplicity: validation patches are only cropped to have dims
+                            multiples of this value.
+
+    """
     train_generator = AsyncBatchGenerator(patch_shape,
                                           self.train_paths,
                                           self.load_path)
