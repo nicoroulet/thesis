@@ -195,6 +195,9 @@ class Dataset(object):
     train_generator = AsyncBatchGenerator(patch_shape,
                                           self.train_paths,
                                           self.load_path)
+    # val_generator = AsyncBatchGenerator(patch_shape,
+    #                                     self.val_paths,
+    #                                     self.load_path)
     val_generator = AsyncBatchGenerator(None,
                                         self.val_paths,
                                         self.load_path,

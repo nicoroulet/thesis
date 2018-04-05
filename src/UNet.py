@@ -40,7 +40,7 @@ def build_unet(n_classes, depth=4, base_filters=32):
         n_filters //= 2
         x = Conv3DTranspose(filters=n_filters, kernel_size=(2,2,2),
                             strides=(2,2,2))(x)
-        x = Add()([x, layer_outputs.pop()])
+        x = concatenate([x, layer_outputs.pop()])
         x = Conv3D(filters=n_filters, **conv_params)(x)
         x = Conv3D(filters=n_filters, **conv_params)(x)
 
