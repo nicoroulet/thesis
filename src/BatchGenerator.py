@@ -4,6 +4,7 @@ import queue
 import random
 import threading
 from sys import stdout
+import keras.backend as K
 
 class Transformations:
   NONE  = 0
@@ -127,7 +128,7 @@ class FetcherThread(threading.Thread):
       paths: the list of paths to all elements of the dataset.
       queue: the queue where the data is stored.
     """
-    super(FetcherThread,self).__init__()
+    super(FetcherThread, self).__init__()
     self.loader_function = loader_function
     self.paths = paths
     self.queue = queue
@@ -146,7 +147,7 @@ class AsyncBatchGenerator(BatchGenerator):
 
   def __init__(self, patch_shape, paths, loader_function, max_queue_size=10,
                pool_size=10, transformations=Transformations.ALL,
-               patch_multiplicity=1):
+               patch_multiplicity=1, n_classes=2):
     """ Initialize the thread that fetches objects in the queue.
 
     Args:
@@ -174,6 +175,7 @@ class AsyncBatchGenerator(BatchGenerator):
     self.cycle = itertools.cycle(range(pool_size))
     self.transformations = transformations
     self.patch_multiplicity = patch_multiplicity
+    self.n_classes = n_classes
 
   def generate_patches(self):
     while (True):

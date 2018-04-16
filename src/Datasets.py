@@ -6,7 +6,7 @@ import pickle
 from BatchGenerator import AsyncBatchGenerator, Transformations
 
 # Deprecate IBSR
-class IBSR(object):
+class IBSR:
 
   n_classes = 4
 
@@ -133,7 +133,7 @@ class IBSR(object):
     return [seg for _, seg in self.subjects.values()]
 
 
-class TrainableDataset(object):
+class TrainableDataset:
 
   def __init__(self, dataset, validation_portion=.2, normalize=True):
     X = dataset.get_X()
@@ -158,7 +158,7 @@ if __name__ == '__main__':
 
 
 
-class Dataset(object):
+class Dataset:
   """ Abstract Dataset class. Requires the subclass to contain train_paths and
       val_paths, and implement the load_path and _get_paths methods
   """
@@ -166,8 +166,12 @@ class Dataset(object):
   def __init__(self, root_path, validation_portion):
     paths = self._get_paths(root_path)
     val_n = int(len(paths) * validation_portion)
-    self.train_paths = paths[:-val_n]
-    self.val_paths = paths[-val_n:]
+    if val_n == 0:
+      self.train_paths = paths
+      self.val_paths = []
+    else:
+      self.train_paths = paths[:-val_n]
+      self.val_paths = paths[-val_n:]
 
   @staticmethod
   def normalize(X):
@@ -191,6 +195,27 @@ class Dataset(object):
     segmentation. """
     raise NotImplementedError()
 
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    raise NotImplementedError()
+
+  @property
+  def n_images(self):
+    return len(self.paths)
+
+  def get_train_generator(self, patch_shape):
+    return AsyncBatchGenerator(patch_shape,
+                               self.train_paths,
+                               self.load_path)
+
+  def get_val_generator(self, patch_multiplicity):
+    return AsyncBatchGenerator(None,
+                               self.val_paths,
+                               self.load_path,
+                               transformations=Transformations.NONE,
+                               patch_multiplicity=patch_multiplicity)
+
   def get_generators(self, patch_shape, patch_multiplicity=1):
     """ Get both training generator and validation generator.
         The training generator crops images and applies augmentation,
@@ -199,20 +224,10 @@ class Dataset(object):
         patch_shape: dimensions of the training patches.
         patch_multiplicity: validation patches are only cropped to have dims
                             multiples of this value.
-
     """
-    train_generator = AsyncBatchGenerator(patch_shape,
-                                          self.train_paths,
-                                          self.load_path)
-    # val_generator = AsyncBatchGenerator(patch_shape,
-    #                                     self.val_paths,
-    #                                     self.load_path)
-    val_generator = AsyncBatchGenerator(None,
-                                        self.val_paths,
-                                        self.load_path,
-                                        transformations=Transformations.NONE,
-                                        patch_multiplicity=patch_multiplicity)
-    return train_generator, val_generator
+    return (self.get_train_generator(patch_shape),
+            self.get_val_generator(patch_multiplicity))
+
 
 class NiftiDataset(Dataset):
   """ Dataset that loads files of NIFTI (.nii) format """
@@ -229,10 +244,24 @@ class NiftiDataset(Dataset):
     return (data, seg)
 
 class ATLAS(NiftiDataset):
+  """ Anatomical Tracing of Lesions After Stroke (ATLAS) dataset wrapper.
+  TODO: unclear what the segmentation values mean.
+  """
 
   def __init__(self, root_path='../../data/ATLAS_R1.1/',
                validation_portion=.2):
     super(ATLAS, self).__init__(root_path, validation_portion)
+
+  def load_path(self, path):
+    data_path = self._get_data_path(path)
+    data = nib.load(data_path).get_data().astype('float32')
+    data = self.normalize(data.reshape(data.shape + (1,)))
+
+    seg_paths = self._get_seg_paths(path)
+    seg = (sum(nib.load(path).get_data() for path in seg_paths) != 0).astype(
+                                                                        'int8')
+    seg = seg.reshape(seg.shape + (1,))
+    return (data, seg)
 
   def _get_data_path(self, path):
     data_path = glob(path + '/*deface*')
@@ -246,12 +275,37 @@ class ATLAS(NiftiDataset):
   def _get_paths(self, root_path):
     return glob(root_path + '*/*/*')
 
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 2
+
 
 class BraTS(NiftiDataset):
-
+  """ MICCAI's Multimodal Brain Tumor Segmentation Challenge 2017 dataset.
+  Segmentation labels:
+    1 for necrosis
+    2 for edema
+    3 for non-enhancing tumor
+    4 for enhancing tumor
+    0 for everything else
+  """
   def __init__(self, root_path='../../data/MICCAI_BraTS17_Data_Training/',
                validation_portion=.2):
     super(BraTS, self).__init__(root_path, validation_portion)
+
+  def load_path(self, path):
+    # TODO: rotate data and seg to match orientation across datasets
+    data_path = self._get_data_path(path)
+    data = nib.load(data_path).get_data().astype('float32')
+    data = self.normalize(data.reshape(data.shape + (1,)))
+
+    seg_path = self._get_seg_paths(path)
+    assert(len(seg_path) == 1)
+    seg_path = seg_path[0]
+    seg = nib.load(path).get_data().astype('int8')
+    seg = seg.reshape(seg.shape + (1,))
+    return (data, seg)
 
   def _get_data_path(self, path):
     data_path = glob(path + '/*t1.nii.gz')
@@ -269,3 +323,50 @@ class BraTS(NiftiDataset):
     # That might not be ideal.
     return glob(root_path + '*/*')
 
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 4
+
+class MRBrainS(NiftiDataset):
+  """ MRBrainS13 brain image segmentation challenge (anatomical)
+
+  Labels:
+    1 Cerebrospinal fluid (including ventricles)
+    2 Gray matter (cortical gray matter and basal ganglia)
+    3 White matter (including white matter lesions)
+    0 Everyting else
+  """
+  def __init__(self, root_path='../../data/MRBrainS13DataNii/',
+               validation_portion=.2):
+    super(MRBrainS, self).__init__(root_path, validation_portion)
+
+  def load_path(self, path):
+    # TODO: rotate data and seg to match orientation across datasets
+    data_path = self._get_data_path(path)
+    data = nib.load(data_path).get_data().astype('float32')
+    data = self.normalize(data.reshape(data.shape + (1,)))
+
+    seg_path = self._get_seg_paths(path)
+    assert(len(seg_path) == 1)
+    seg_path = seg_path[0]
+    seg = nib.load(seg_path).get_data().astype('int8')
+    seg = seg.reshape(seg.shape + (1,))
+    return (data, seg)
+
+  def _get_data_path(self, path):
+    data_path = glob(path + '/T1.nii')[0]
+    return data_path
+
+  def _get_seg_paths(self, path):
+    # LabelsForTraining.nii contains addidional labels, LabelsForTesting.nii
+    # only the ones mentioned above
+    return glob(path + '/LabelsForTesting.nii')
+
+  def _get_paths(self, root_path):
+    return glob(root_path + 'TrainingData/*')
+
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 4
