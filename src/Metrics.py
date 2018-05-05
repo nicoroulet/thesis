@@ -18,43 +18,87 @@ def sparse_dice_coef(y_true, y_pred):
       (0 is background). This distinction is useful for computing tp, for
       fp + fn, we just compute all the incorrect labelings.
   """
-  # y_true_f = K.flatten(y_true)
+  # shape notation: b = batch index, d = depth, w = width, h = height
+  # y_true shape: (b, d, w, h, 1)
+  # y_pred shape: (b, d, w, h, n_classes)
   n_classes = K.shape(y_pred)[-1]
-  y_true_int = K.cast(K.sum(y_true, axis=-1), 'int32')
+  # y_true_int shape: (b, d, w, h)
+  y_true_int = K.cast(K.squeeze(y_true, axis=-1), 'int32')
+  # y_true_int = K.print_tensor(y_true_int, message='y_true_int = ')
 
+  # positive_mask shape: (b, d, w, h, 1)
   positive_mask = K.clip(y_true, 0, 1)
+  # correct_mask shape: (b, d, w, h, n_classes)
   correct_mask = K.one_hot(y_true_int, n_classes)
-  # y_pred_for_correct = K.gather(y_pred, y_true_int)
+  # correct_scores shape: (b, d, w, h, n_classes)
+  correct_scores = correct_mask * y_pred
   # Scores given to the correct labels
-  tp = K.sum(positive_mask * K.sum(correct_mask * y_pred))
+  # correct_scores_sum shape: (b, d, w, h, 1)
+  correct_scores_sum = K.sum(correct_scores, axis=-1, keepdims=True)
+  # True Positive: sum of correct scores assigned to positive label
+  tp = K.sum(positive_mask * correct_scores_sum)
 
   bg_scores = y_pred[...,0:1]
   # Positive scores given to the background labels
   fp = K.sum((1 - positive_mask) * (1 - bg_scores))
 
   # Background scores given to the positive labels.
-  # K.gather(y_pred, K.zeros_like(y_true_int))
   fn = K.sum(bg_scores * positive_mask)
 
   num = 2 * tp
   den = num + fn + fp + 1e-4
-  # assert(den > 0)
-  # if den == 0:
-  #   return 0
   return num / den
 
-  # y_pred_f = K.cast(K.flatten(K.gather(y_pred, axis=-1)), dtype='float32')
-  # # y_pred_f =
 
+def mean_dice_coef(ignore_background=True):
+  """ Returns a metric that computes the dice coefficient between two
+  labelings by averaging the dice coefficient of each label against the rest.
+  Args:
+      ignore_background: if True, dice for the background label (0) is not
+                         averaged.
+  """
+  def _mean_dice_coef(y_true, y_pred):
+    # y_true is in sparse notation (one category number per voxel), while
+    # y_pred is in categorical notation (a probability distribution for each
+    #                                    voxel)
+    n_classes = K.int_shape(y_pred)[-1]
+    labels = range(ignore_background, n_classes)
+    n_labels = n_classes - ignore_background
+    mean = None
+    for label in labels:
+      # label is the positive label.
 
-  # y_true_f = K.flatten(y_true)
-  # y_pred_f = K.cast(K.flatten(K.argmax(y_pred, axis=-1)), dtype='float32')
-  # corrects = K.cast(K.equal(y_true_f, y_pred_f), dtype='float32')
-  # # 2 * tp
-  # tp_dbl = 2 * K.sum(corrects * K.clip(y_true_f, 0, 1))
-  # # fp + fn
-  # fp_fn = K.sum(-corrects + 1)
-  # return tp_dbl / (tp_dbl + fp_fn)
+      # label_mask = K.ones(K.shape(y_true), dtype='float', name='ones') * label
+      positive_mask = K.equal(y_true, label)
+      positive_mask = K.cast(positive_mask, 'float')
+      negative_mask = 1 - positive_mask
+      # True Positive: sum of correct scores assigned to positive label
+      tp = K.sum(y_pred[...,label:label+1] * positive_mask) / (K.sum(positive_mask) + 1e-4)
+      # False Positive: sum of positive scores assigned to negative labels
+      fp = K.sum(y_pred[...,label:label+1] * (negative_mask))  / (K.sum(negative_mask) + 1e-4)
+      # False Negative: sum of negative scores assigned to positive label
+      # This assumes that the sum of scores is 1 (output from softmax)
+      fn = K.sum((1 - y_pred[...,label:label+1]) * positive_mask) / (K.sum(positive_mask) + 1e-4)
+      num = 2 * tp
+      den = num + fp + fn + 1e-5
+      coef = num / den
+
+      if mean is None:
+        mean = coef
+      else:
+        mean += coef
+    mean *= 1 / n_labels
+    return mean
+
+  return _mean_dice_coef
+
+def mean_dice_loss(ignore_background=True):
+
+  def _mean_dice_loss(y_true, y_pred):
+    return 1 - mean_dice_coef(ignore_background)(y_true, y_pred)
+
+  return _mean_dice_loss
+
 
 # def sparse_sum_diff(y_true, y_pred):
 #   # return 1 - sparse_dice_coef(y_true, y_pred)

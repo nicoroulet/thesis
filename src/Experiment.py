@@ -5,7 +5,7 @@ import UNet
 
 import os
 
-from keras.callbacks import ModelCheckpoint
+from keras.callbacks import ModelCheckpoint, TensorBoard, Callback
 
 patch_shape = (32, 32, 32)
 net_depth = 4
@@ -17,33 +17,46 @@ mrbrains = Datasets.MRBrainS()
 
 dataset = mrbrains
 
-tr_gen, val_gen = mrbrains.get_generators(patch_shape,
-                                       patch_multiplicity=(1<<(net_depth-1)))
+def run_UNet():
+  savefile = 'weights/unet_weights.h5'
 
-n_classes = dataset.n_classes
+  tr_gen, val_gen = dataset.get_generators(patch_shape,
+                                         patch_multiplicity=(1<<(net_depth-1)))
 
-model = UNet.build_unet(n_classes, depth=net_depth)
+  n_classes = dataset.n_classes
 
-model.compile(loss='sparse_categorical_crossentropy',#Metrics.sparse_dice_loss,#
-              optimizer='adam',
-              metrics=['accuracy',
-                       Metrics.sparse_dice_coef,
-                       Metrics.sparse_sum_diff])
+  model = UNet.UNet(n_classes, depth=net_depth)
 
-print(model.summary(line_length=150, positions=[.25, .55, .67, 1.]))
+  model.compile(loss='sparse_categorical_crossentropy',#Metrics.sparse_dice_loss,#
+                optimizer='sgd',
+                metrics=['accuracy',
+                         Metrics.sparse_dice_coef,
+                         Metrics.mean_dice_coef()
+                         # Metrics.sparse_sum_diff
+                         ])
 
-if os.path.exists(savefile):
-  model.load_weights(savefile)
+  print(model.summary(line_length=150, positions=[.25, .55, .67, 1.]))
 
-model_checkpoint = ModelCheckpoint(savefile,
-                                   monitor='val_loss',
-                                   save_best_only=True)
+  if os.path.exists(savefile):
+    model.load_weights(savefile)
 
-h = model.fit_generator(tr_gen.generate_batches(batch_size=1),
-                        steps_per_epoch=200,
-                        epochs=10,
-                        validation_data=val_gen.generate_batches(),
-                        validation_steps=5,
-                        callbacks=[model_checkpoint])
+  model_checkpoint = ModelCheckpoint(savefile,
+                                     monitor='val_loss',
+                                     save_best_only=True)
+  # model_checkpoint = Callback()
+  tensor_board = TensorBoard(log_dir='./tensorboard',
+                             histogram_freq=0,
+                             write_graph=True,
+                             write_images=True)
 
-print("Done")
+  h = model.fit_generator(tr_gen.generate_batches(batch_size=1),
+                          steps_per_epoch=20,
+                          epochs=20,
+                          validation_data=val_gen.generate_batches(),
+                          validation_steps=5,
+                          callbacks=[model_checkpoint, tensor_board])
+
+  print("Done")
+
+# def run_MultiUNet()
+run_UNet()

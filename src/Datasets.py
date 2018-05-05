@@ -151,19 +151,52 @@ class TrainableDataset:
     self.X_val = X[-val_n:]
     self.Y_val = Y[-val_n:]
 
-if __name__ == '__main__':
-  """ Load raw dataset and save to pickle """
-  dataset = IBSR(from_pickle=False)
-  dataset.save_pickle()
+# if __name__ == '__main__':
+#   """ Load raw dataset and save to pickle """
+#   dataset = IBSR(from_pickle=False)
+#   dataset.save_pickle()
 
+def preprocess_dataset(dataset, root_dir):
+
+  from nilearn.image import resample_img
+  import os
+
+  if not os.path.exists(root_dir):
+    os.makedirs(root_dir)
+
+  def normalize(X):
+    X -= np.mean(X)
+    X /= np.std(X)
+    return X
+
+  def resample_to_1mm(img):
+    return resample_img(img, target_affine=np.eye(3))
+
+  for i, path in enumerate(dataset.train_paths + dataset.val_paths):
+    print('Processing path: %s' % path)
+    data_path = dataset._get_data_path(path)
+    data_img = nib.load(data_path)
+    preprocessed_data_img = normalize(resample_to_1mm(data_img).get_fdata())
+
+    seg_paths = dataset._get_seg_paths(path)  #TODO: handle multiple paths
+    preprocessed_seg_img = []
+    for seg_path in seg_paths:
+      seg_img = nib.load(seg_path)
+      preprocessed_seg_img.append(resample_to_1mm(seg_img).get_fdata())
+    preprocessed_seg_img = sum(preprocessed_seg_img)
+
+    assert(preprocessed_data_img.shape == preprocessed_seg_img.shape)
+    np.savez_compressed(root_dir + '/%d' % i,
+                        data=preprocessed_data_img,
+                        seg=preprocessed_seg_img)
 
 
 class Dataset:
-  """ Abstract Dataset class. Requires the subclass to contain train_paths and
-      val_paths, and implement the load_path and _get_paths methods
+  """ Abstract Dataset class. Requires the subclass to implement the load_path
+      and _get_paths methods.
   """
 
-  def __init__(self, root_path, validation_portion):
+  def __init__(self, root_path, validation_portion=.2):
     paths = self._get_paths(root_path)
     val_n = int(len(paths) * validation_portion)
     if val_n == 0:
@@ -173,26 +206,11 @@ class Dataset:
       self.train_paths = paths[:-val_n]
       self.val_paths = paths[-val_n:]
 
-  @staticmethod
-  def normalize(X):
-    X -= np.mean(X)
-    X /= np.std(X)
-    return X
-
   def load_path(self, path):
     raise NotImplementedError()
 
   def _get_paths(self, root_path):
     """ Get a meaningful path to each sample from the root path """
-    raise NotImplementedError()
-
-  def _get_data_path(self, path):
-    """ Given a meaningful path to a sample, get the exact path to the data. """
-    raise NotImplementedError()
-
-  def _get_seg_paths(self, path):
-    """ Given a meaningful path to a sample, get the exact path to the
-    segmentation. """
     raise NotImplementedError()
 
   @property
@@ -202,7 +220,7 @@ class Dataset:
 
   @property
   def n_images(self):
-    return len(self.paths)
+    return len(self.train_paths) + len(self.val_paths)
 
   def get_train_generator(self, patch_shape):
     return AsyncBatchGenerator(patch_shape,
@@ -229,13 +247,78 @@ class Dataset:
             self.get_val_generator(patch_multiplicity))
 
 
+class NumpyDataset(Dataset):
+  """ Dataset preprocessed by preprocess_dataset function. """
+
+  def load_path(self, path):
+    img = np.load(path)
+    data = img['data']
+    seg = img['seg']
+    return data.reshape(*data.shape, 1), seg.reshape(*seg.shape, 1)
+
+  def _get_paths(self, root_path):
+    return glob(root_path + '*.npz')
+
+
+class ATLAS(NumpyDataset):
+  """ Anatomical Tracing of Lesions After Stroke (ATLAS) dataset wrapper.
+  TODO: unclear what the segmentation values mean.
+  """
+  def __init__(self, root_path='../../data/preprocessed_datasets/atlas/',
+               validation_portion=.2):
+    super(ATLAS, self).__init__(root_path, validation_portion)
+
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 2
+
+
+class BraTS(NumpyDataset):
+  """ MICCAI's Multimodal Brain Tumor Segmentation Challenge 2017 dataset.
+  Segmentation labels:
+    1 for necrosis
+    2 for edema
+    3 for non-enhancing tumor
+    4 for enhancing tumor
+    0 for everything else
+  """
+
+  def __init__(self, root_path='../../data/preprocessed_datasets/brats/',
+               validation_portion=.2):
+    super(BraTS, self).__init__(root_path, validation_portion)
+
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 4
+
+class MRBrainS(NumpyDataset):
+  """ MRBrainS13 brain image segmentation challenge (anatomical)
+
+  Labels:
+    1 Cerebrospinal fluid (including ventricles)
+    2 Gray matter (cortical gray matter and basal ganglia)
+    3 White matter (including white matter lesions)
+    0 Everyting else
+  """
+  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains/',
+               validation_portion=.2):
+    super(MRBrainS, self).__init__(root_path, validation_portion)
+
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 4
+
+
 class NiftiDataset(Dataset):
   """ Dataset that loads files of NIFTI (.nii) format """
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
     data = nib.load(data_path).get_data().astype('float32')
-    data = self.normalize(data.reshape(data.shape + (1,)))
+    data = data.reshape(data.shape + (1,))
 
     seg_paths = self._get_seg_paths(path)
     seg = (sum(nib.load(path).get_data() for path in seg_paths) != 0).astype(
@@ -243,19 +326,29 @@ class NiftiDataset(Dataset):
     seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
-class ATLAS(NiftiDataset):
+  def _get_data_path(self, path):
+    """ Given a meaningful path to a sample, get the exact path to the data. """
+    raise NotImplementedError()
+
+  def _get_seg_paths(self, path):
+    """ Given a meaningful path to a sample, get the exact path to the
+    segmentation. """
+    raise NotImplementedError()
+
+
+class RawATLAS(NiftiDataset):
   """ Anatomical Tracing of Lesions After Stroke (ATLAS) dataset wrapper.
   TODO: unclear what the segmentation values mean.
   """
 
   def __init__(self, root_path='../../data/ATLAS_R1.1/',
                validation_portion=.2):
-    super(ATLAS, self).__init__(root_path, validation_portion)
+    super(RawATLAS, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
     data = nib.load(data_path).get_data().astype('float32')
-    data = self.normalize(data.reshape(data.shape + (1,)))
+    data = data.reshape(data.shape + (1,))
 
     seg_paths = self._get_seg_paths(path)
     seg = (sum(nib.load(path).get_data() for path in seg_paths) != 0).astype(
@@ -281,7 +374,7 @@ class ATLAS(NiftiDataset):
     return 2
 
 
-class BraTS(NiftiDataset):
+class RawBraTS(NiftiDataset):
   """ MICCAI's Multimodal Brain Tumor Segmentation Challenge 2017 dataset.
   Segmentation labels:
     1 for necrosis
@@ -292,13 +385,13 @@ class BraTS(NiftiDataset):
   """
   def __init__(self, root_path='../../data/MICCAI_BraTS17_Data_Training/',
                validation_portion=.2):
-    super(BraTS, self).__init__(root_path, validation_portion)
+    super(RawBraTS, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
     # TODO: rotate data and seg to match orientation across datasets
     data_path = self._get_data_path(path)
     data = nib.load(data_path).get_data().astype('float32')
-    data = self.normalize(data.reshape(data.shape + (1,)))
+    data = data.reshape(data.shape + (1,))
 
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
@@ -328,7 +421,7 @@ class BraTS(NiftiDataset):
     """ Returns the number of classes of the dataset output. """
     return 4
 
-class MRBrainS(NiftiDataset):
+class RawMRBrainS(NiftiDataset):
   """ MRBrainS13 brain image segmentation challenge (anatomical)
 
   Labels:
@@ -339,13 +432,13 @@ class MRBrainS(NiftiDataset):
   """
   def __init__(self, root_path='../../data/MRBrainS13DataNii/',
                validation_portion=.2):
-    super(MRBrainS, self).__init__(root_path, validation_portion)
+    super(RawMRBrainS, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
     # TODO: rotate data and seg to match orientation across datasets
     data_path = self._get_data_path(path)
     data = nib.load(data_path).get_data().astype('float32')
-    data = self.normalize(data.reshape(data.shape + (1,)))
+    data = data.reshape(data.shape + (1,))
 
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
@@ -370,3 +463,9 @@ class MRBrainS(NiftiDataset):
   def n_classes(self):
     """ Returns the number of classes of the dataset output. """
     return 4
+
+
+if __name__ == '__main__':
+  preprocess_dataset(MRBrainS(), '../../data/preprocessed_datasets/mrbrains')
+  preprocess_dataset(ATLAS(), '../../data/preprocessed_datasets/atlas')
+  preprocess_dataset(BraTS(), '../../data/preprocessed_datasets/brats')
