@@ -8,7 +8,7 @@ import os
 from keras.callbacks import ModelCheckpoint, TensorBoard, Callback
 
 patch_shape = (32, 32, 32)
-net_depth = 4
+net_depth = 3
 savefile = 'weights.h5'
 
 atlas = Datasets.ATLAS()
@@ -18,10 +18,11 @@ mrbrains = Datasets.MRBrainS()
 dataset = mrbrains
 
 def run_UNet():
-  savefile = 'weights/unet_weights.h5'
+  savedir = 'weights'
+  savefile = savedir + 'unet_weights.h5'
 
   tr_gen, val_gen = dataset.get_generators(patch_shape,
-                                         patch_multiplicity=(1<<(net_depth-1)))
+                                         patch_multiplicity=2**net_depth)
 
   n_classes = dataset.n_classes
 
@@ -37,6 +38,8 @@ def run_UNet():
 
   print(model.summary(line_length=150, positions=[.25, .55, .67, 1.]))
 
+  if not os.path.exists(savedir):
+    os.mkdir(savedir)
   if os.path.exists(savefile):
     model.load_weights(savefile)
 
@@ -49,10 +52,10 @@ def run_UNet():
                              write_graph=True,
                              write_images=True)
 
-  h = model.fit_generator(tr_gen.generate_batches(batch_size=1),
+  h = model.fit_generator(tr_gen.generate_batches(batch_size=5),
                           steps_per_epoch=20,
                           epochs=20,
-                          validation_data=val_gen.generate_batches(),
+                          validation_data=val_gen.generate_batches(batch_size=1),
                           validation_steps=5,
                           callbacks=[model_checkpoint, tensor_board])
 
