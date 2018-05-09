@@ -153,7 +153,7 @@ class AsyncBatchGenerator(BatchGenerator):
   """
 
   def __init__(self, patch_shape, paths, loader_function, max_queue_size=10,
-               pool_size=10, transformations=Transformations.ALL,
+               pool_size=5, transformations=Transformations.ALL,
                patch_multiplicity=1, n_classes=2):
     """ Initialize the thread that fetches objects in the queue.
 
@@ -187,7 +187,7 @@ class AsyncBatchGenerator(BatchGenerator):
 
   def generate_patches(self):
     while (True):
-      for _ in range(10):  # TODO: parameterize
+      for _ in range(20):  # TODO: parameterize
         X, Y = random.choice(self.pool)
         yield self.maybe_flip(
                 self.add_gaussian_noise(
@@ -200,6 +200,37 @@ class AsyncBatchGenerator(BatchGenerator):
         self.pool.append(self.queue.get())
         self.queue.task_done()
 
+
+class GeneratorThread(threading.Thread):
+
+  def __init__(self, batch_generator, queue):
+    """ Eagerly generates batches and stores them in a queue.
+
+    Args:
+      batch_generator: generator used to produce the batches.
+    """
+    super(GeneratorThread, self).__init__()
+    self.batch_generator = batch_generator
+    self.queue = queue
+    self.daemon = True
+
+  def run(self):
+    while (True):
+      self.queue.put(next(self.batch_generator))
+
+class FetcherGenerator:
+
+  def __init__(self, batch_size, *args, **kwargs):
+    generator = AsyncBatchGenerator(*args, **kwargs).generate_batches(batch_size)
+    self.queue = queue.Queue(maxsize=10)
+    self.thread = GeneratorThread(generator, self.queue)
+    self.thread.start()
+
+  def generate_batches(self, *args, **kwargs):
+    while (True):
+      batch = self.queue.get()
+      self.queue.task_done()
+      yield batch
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@ import nibabel as nib
 import numpy as np
 import pickle
 
-from BatchGenerator import AsyncBatchGenerator, Transformations
+from BatchGenerator import AsyncBatchGenerator, Transformations, FetcherGenerator
 
 # Deprecate IBSR
 class IBSR:
@@ -234,6 +234,18 @@ class Dataset:
                                transformations=Transformations.NONE,
                                patch_multiplicity=patch_multiplicity)
 
+  # def get_train_generator(self, patch_shape):
+  #   return FetcherGenerator(5, patch_shape,
+  #                              self.train_paths,
+  #                              self.load_path)
+
+  # def get_val_generator(self, patch_multiplicity):
+  #   return FetcherGenerator(1, None,
+  #                              self.val_paths,
+  #                              self.load_path,
+  #                              transformations=Transformations.NONE,
+  #                              patch_multiplicity=patch_multiplicity)
+
   def get_generators(self, patch_shape, patch_multiplicity=1):
     """ Get both training generator and validation generator.
         The training generator crops images and applies augmentation,
@@ -252,12 +264,12 @@ class NumpyDataset(Dataset):
 
   def load_path(self, path):
     img = np.load(path)
-    data = img['data']
-    seg = img['seg']
+    data = img[0]
+    seg = img[1]
     return data.reshape(*data.shape, 1), seg.reshape(*seg.shape, 1)
 
   def _get_paths(self, root_path):
-    return glob(root_path + '*.npz')
+    return glob(root_path + '*.npy')
 
 
 class ATLAS(NumpyDataset):
