@@ -31,10 +31,17 @@ class BatchGenerator(object):
     self.patch_multiplicity = patch_multiplicity
 
   @staticmethod
+  def get_labels(Y):
+    return [y for y in range(np.max(Y)) if np.any(Y == y)]
+
+  @staticmethod
   def get_voxel_of_rand_label(Y):
-    labels = list(set(Y.flat))
-    label = np.random.choice(labels)
-    return random.choice(np.argwhere(Y == label))[:-1]
+    # labels = list(set(Y.flat))
+    labels = range(int(np.max(Y)))
+    while (True):
+      label = np.random.choice(labels)
+      if np.any(Y == label):
+        return random.choice(np.argwhere(Y == label))[:-1]
     # index = possible_indexes[np.random.randint(possible_indexes.shape[0])]
     # return index
 
@@ -96,7 +103,7 @@ class BatchGenerator(object):
       for X, Y in gen:
         yield (X.reshape(1, *X.shape),
                Y.reshape(1, *Y.shape))
-    while 1:
+    while True:
       batch = (np.zeros((batch_size, *self.patch_shape, 1)),
                np.zeros((batch_size, *self.patch_shape, 1)))
 
@@ -168,9 +175,10 @@ class AsyncBatchGenerator(BatchGenerator):
     self.thread = FetcherThread(loader_function, paths, self.queue)
     self.thread.start()
     self.pool = []
-    for _ in range(pool_size):
-      self.pool.append(self.queue.get())
-      self.queue.task_done()
+    self.pool_size = pool_size
+    # for _ in range(pool_size):
+    self.pool.append(self.queue.get())
+    self.queue.task_done()
     # print('pool', len(self.pool))
     self.cycle = itertools.cycle(range(pool_size))
     self.transformations = transformations
@@ -188,6 +196,10 @@ class AsyncBatchGenerator(BatchGenerator):
       idx = next(self.cycle)
       self.pool[idx] = self.queue.get()
       self.queue.task_done()
+      if len(self.pool) < self.pool_size:
+        self.pool.append(self.queue.get())
+        self.queue.task_done()
+
 
 
 if __name__ == '__main__':
