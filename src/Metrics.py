@@ -1,4 +1,3 @@
-import keras
 import keras.backend as K
 
 import tensorflow as tf
@@ -10,6 +9,7 @@ import tensorflow as tf
 ################################################################################
 
 # Continuous metrics operate on the class scores.
+
 
 class continuous:
 
@@ -47,7 +47,7 @@ class continuous:
     # True Positive: sum of correct scores assigned to positive label
     tp = K.sum(positive_mask * correct_scores_sum)
 
-    bg_scores = y_pred[...,0:1]
+    bg_scores = y_pred[..., 0:1]
     # Positive scores given to the background labels
     fp = K.sum((1 - positive_mask) * (1 - bg_scores))
 
@@ -60,8 +60,7 @@ class continuous:
 
   @staticmethod
   def sparse_dice_loss(y_true, y_pred):
-    return 1 - sparse_dice_coef(y_true, y_pred)
-
+    return 1 - continuous.sparse_dice_coef(y_true, y_pred)
 
   @staticmethod
   def mean_dice_coef(ignore_background=True):
@@ -82,17 +81,19 @@ class continuous:
       for label in labels:
         # label is the positive label.
 
-        # label_mask = K.ones(K.shape(y_true), dtype='float', name='ones') * label
         positive_mask = K.equal(y_true, label)
         positive_mask = K.cast(positive_mask, 'float')
         negative_mask = 1 - positive_mask
         # True Positive: sum of correct scores assigned to positive label
-        tp = K.sum(y_pred[...,label:label+1] * positive_mask)# / (K.sum(positive_mask) + 1e-4)
+        tp = K.sum(y_pred[..., label:label + 1] * positive_mask)
+        # / (K.sum(positive_mask) + 1e-4)
         # False Positive: sum of positive scores assigned to negative labels
-        fp = K.sum(y_pred[...,label:label+1] * (negative_mask))# / (K.sum(negative_mask) + 1e-4)
+        fp = K.sum(y_pred[..., label:label + 1] * (negative_mask))
+        # / (K.sum(negative_mask) + 1e-4)
         # False Negative: sum of negative scores assigned to positive label
         # This assumes that the sum of scores is 1 (output from softmax)
-        fn = K.sum((1 - y_pred[...,label:label+1]) * positive_mask)# / (K.sum(positive_mask) + 1e-4)
+        fn = K.sum((1 - y_pred[..., label:label + 1]) * positive_mask)
+        # / (K.sum(positive_mask) + 1e-4)
         num = 2 * tp
         den = num + fp + fn + 1e-5
         coef = num / den
@@ -110,7 +111,7 @@ class continuous:
   def mean_dice_loss(ignore_background=True):
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - mean_dice_coef(ignore_background)(y_true, y_pred)
+      return 1 - continuous.mean_dice_coef(ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
 
@@ -119,6 +120,7 @@ class continuous:
 ################################################################################
 
 # Discrete metrics operate on the predicted classes.
+
 
 class discrete:
 
@@ -139,7 +141,8 @@ class discrete:
 
     positive_mask = K.clip(y_true, 0, 1)
 
-    tp = positive_mask * K.cast(K.equal(y_true, y_pred), 'float')# / K.sum(positive_mask)
+    tp = positive_mask * K.cast(K.equal(y_true, y_pred), 'float')
+    # / K.sum(positive_mask)
 
     fp_fn = K.cast(K.not_equal(y_true, y_pred), 'float')
 
@@ -149,9 +152,7 @@ class discrete:
 
   @staticmethod
   def sparse_dice_loss(y_true, y_pred):
-    return 1 - sparse_dice_coef(y_true, y_pred)
-
-
+    return 1 - discrete.sparse_dice_coef(y_true, y_pred)
 
   @staticmethod
   def mean_dice_coef(n_classes, ignore_background=True):
@@ -170,9 +171,6 @@ class discrete:
       mean = 0
       for label in labels:
         # label is the positive label.
-
-
-        # label_mask = K.ones(K.shape(y_true), dtype='float', name='ones') * label
         positive_mask = K.cast(K.equal(y_true, label), 'float')
         correct_mask = K.cast(K.equal(y_pred, label), 'float')
         tp = K.sum(positive_mask * correct_mask)
@@ -193,7 +191,7 @@ class discrete:
   def mean_dice_loss(ignore_background=True):
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - mean_dice_coef(ignore_background)(y_true, y_pred)
+      return 1 - discrete.mean_dice_coef(ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
 
@@ -202,7 +200,8 @@ class discrete:
     def loss_wrapper(y_true, y_pred):
       # y_true is in sparse notation
       # y_pred is in categorical notation
-      y_pred_sparse = K.cast(K.expand_dims(K.argmax(y_pred, axis=-1), axis=-1), 'float')
+      y_pred_sparse = K.cast(K.expand_dims(K.argmax(y_pred, axis=-1), axis=-1),
+                             'float')
       return loss(y_true, y_pred_sparse)
 
     return loss_wrapper
