@@ -1,3 +1,8 @@
+"""Collection of batch generators.
+
+TODO: add description of each.
+"""
+
 import itertools
 import numpy as np
 import queue
@@ -6,14 +11,36 @@ import threading
 from sys import stdout
 import keras.backend as K
 
+
 class Transformations:
-  NONE  = 0
-  CROP  = 1
-  FLIP  = 1 << 1
+  """Enumerate of patch transformations, arranged as a bit set.
+
+  Attributes:
+      ALL: apply all transformations
+      CROP: crop a patch of patch_shape from the original image
+      FLIP: randomply perform a horizontal flip
+      NOISE: add gaussian noise
+      NONE: none of the above
+  """
+
+  NONE = 0
+  CROP = 1
+  FLIP = 1 << 1
   NOISE = 1 << 2
-  ALL   = (1 << 3) - 1
+  ALL = (1 << 3) - 1
+
 
 class BatchGenerator(object):
+  """Basic batch generator. Uses a dataset that is loaded into memory.
+
+  Attributes:
+      dataset (Dataset): The dataset from which to generate batches.
+      patch_multiplicity (int): multiplicity forced to patch dimensions.
+          Useful for validation patches (without cropping)
+      patch_shape (tuple): shape of the sampled patches
+      transformations (Transformation): transformations to apply to generate
+          patches.
+  """
 
   def __init__(self,
                dataset,
@@ -21,6 +48,7 @@ class BatchGenerator(object):
                transformations=Transformations.ALL,
                patch_multiplicity=1):
     """ Initialize batch generator.
+
     Args:
         dataset: object that contains X_train, Y_train, X_val, Y_val
         patch_shape: patch depth, width, height
@@ -36,14 +64,21 @@ class BatchGenerator(object):
 
   @staticmethod
   def get_voxel_of_rand_label(Y):
-    # labels = list(set(Y.flat))
+    """Random voxel from the given index, with balanced label probabilities.
+
+    Args:
+        Y (Numpy array): Image from which to pick the voxel.
+
+    Returns:
+        Numpy array: coordinates of the chosen voxel.
+    """
     labels = range(int(np.max(Y)))
     while (True):
       label = np.random.choice(labels)
-      if np.any(Y == label):
+      try:
         return random.choice(np.argwhere(Y == label))[:-1]
-    # index = possible_indexes[np.random.randint(possible_indexes.shape[0])]
-    # return index
+      except IndexError:
+        pass
 
   def generate_cuboid(self, volume_shape, contained_voxel):
     """ Generates a cuboid of patch size containing the given voxel, inside
