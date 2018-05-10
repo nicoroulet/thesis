@@ -16,6 +16,7 @@ mrbrains = Datasets.MRBrainS()
 
 
 def train_unet():
+  """Build UNet, load the weights (if any), train, save weights."""
   dataset = mrbrains
   savedir = 'weights'
   savefile = savedir + '/unet.h5'
@@ -66,6 +67,13 @@ def train_unet():
 
 
 def train_multiunet(epochs=1, steps_per_epoch=20, batch_size=5):
+  """Build a MultiUNet, load weights (if any), train and save weights.
+
+  Args:
+      epochs (int, optional): Description
+      steps_per_epoch (int, optional): Description
+      batch_size (int, optional): Description
+  """
   tumor_gen = brats.get_train_generator(patch_shape)
 
   anatomical_gen = mrbrains.get_train_generator(patch_shape)
@@ -110,4 +118,4 @@ def test_multiunet():
 
   model.evaluate_generator(anatomical_gen)
 
-train_multiunet(epochs=1, steps_per_epoch=50)
+train_multiunet(epochs=5, steps_per_epoch=50)

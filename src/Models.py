@@ -13,9 +13,21 @@ from keras.callbacks import ModelCheckpoint
 
 
 class MultiUNet:
+  """Muliti task segmentation model based on multiple UNets.
+
+  An independent UNet is trained per each task. Upon evaluation, predictions
+  from each net are merged by an order of priorities.
+
+  Attributes:
+      callbacks (dict): stores callbacks for each network.
+      labels (list): concatenation of labels from all tasks, in priority order.
+      nets (dict): maps task names to the corresponding network.
+      savefiles (dict): maps task names to the savefiles used to store weights.
+      task_names (list): task names, in priority order.
+  """
 
   def __init__(self, tasks, net_depth=4):
-    """ Builds a model with one UNet per task.
+    """ Build a model with one UNet per task.
 
     Args:
         tasks: list of dicts storing: {name, labels}
@@ -43,8 +55,8 @@ class MultiUNet:
       self.labels.append(task["labels"])
       self.nets[name] = UNet.UNet(n_classes)
       self.nets[name].compile(
-                    loss=Metrics.continuous.sparse_dice_loss,
-                    # loss='sparse_categorical_crossentropy',
+                    # loss=Metrics.continuous.sparse_dice_loss,
+                    loss='sparse_categorical_crossentropy',
                     optimizer='adam',
                     metrics=['accuracy',
                              Metrics.continuous.sparse_dice_coef,
@@ -94,7 +106,7 @@ class MultiUNet:
     return merge
 
   def evaluate_generator(self, generator, metrics, steps=5):
-    """Evaluates the model on the given generator.
+    """Evaluate the model on the given generator.
 
     Args:
         generator: Batch generator used for evaluation. Important: labels used
@@ -111,7 +123,7 @@ class MultiUNet:
     return np.mean(metrics, axis=0)
 
   def predict(self, x):
-    """ Returns a prediction for the given input.
+    """ Return a prediction for the given input.
 
     Args:
         X (Numpy array): input 3d image.
