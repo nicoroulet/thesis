@@ -72,7 +72,7 @@ class BatchGenerator(object):
     Returns:
         Numpy array: coordinates of the chosen voxel.
     """
-    labels = range(int(np.max(Y)))
+    labels = range(int(np.max(Y)) + 1)
     while (True):
       label = np.random.choice(labels)
       try:

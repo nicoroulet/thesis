@@ -1,13 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import keras
+import matplotlib.animation as anim
+
 
 def write_gif(img3d, filename, fps=24):
-  """ Writes the image to the given paths as a GIF, one frame per layer. """
+  """ Write the image to the given paths as a GIF, one frame per layer. """
   import array2gif
   to_rgb = [np.array([layer, layer, layer]).astype(int) // 100
             for layer in img3d]
   array2gif.write_gif(to_rgb, filename, fps=fps)
+
 
 class Timeline:
 

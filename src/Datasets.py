@@ -162,7 +162,7 @@ def normalize(X):
   """Normalize a given image.
 
   Args:
-      X (Numpt array): Input image
+      X (Numpy array): Input image
 
   Returns:
       Numpy array: normalized image
@@ -177,7 +177,8 @@ def resample_to_1mm(img, interpolation='continuous'):
 
   Args:
       img (Nifty Image): Input image
-      **kwargs: additional arguments for resampling (e.g. interpolation)
+      interpolation (string): resampling method. 'continuous', 'nearest' or
+          'linear'
 
   Returns:
       Nifty Image: Resampled image
@@ -209,7 +210,8 @@ def preprocess_dataset(dataset, root_dir):
     # preprocessed_seg_img = []
     # for seg_path in seg_paths:
     #   seg_img = nib.load(seg_path)
-    #   preprocessed_seg_img.append(resample_to_1mm(seg_img, interpolation=linear).get_fdata())
+    #   preprocessed_seg_img.append(resample_to_1mm(seg_img,
+    #                                         interpolation=linear).get_fdata())
     # preprocessed_seg_img = sum(preprocessed_seg_img)
 
     assert(data.shape == seg.shape)
@@ -313,6 +315,8 @@ class ATLAS(NumpyDataset):
     """ Returns the number of classes of the dataset output. """
     return 2
 
+  name = 'atlas'
+
 
 class BraTS(NumpyDataset):
   """ MICCAI's Multimodal Brain Tumor Segmentation Challenge 2017 dataset.
@@ -331,7 +335,10 @@ class BraTS(NumpyDataset):
   @property
   def n_classes(self):
     """ Returns the number of classes of the dataset output. """
-    return 4
+    return 5
+
+  name = 'brats'
+
 
 class MRBrainS(NumpyDataset):
   """ MRBrainS13 brain image segmentation challenge (anatomical)
@@ -350,6 +357,8 @@ class MRBrainS(NumpyDataset):
   def n_classes(self):
     """ Returns the number of classes of the dataset output. """
     return 4
+
+  name = 'mrbrains'
 
 
 class NiftiDataset(Dataset):
@@ -413,6 +422,8 @@ class RawATLAS(NiftiDataset):
     """ Returns the number of classes of the dataset output. """
     return 2
 
+  name = 'atlas'
+
 
 class RawBraTS(NiftiDataset):
   """ MICCAI's Multimodal Brain Tumor Segmentation Challenge 2017 dataset.
@@ -428,7 +439,6 @@ class RawBraTS(NiftiDataset):
     super(RawBraTS, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
-    # TODO: rotate data and seg to match orientation across datasets
     data_path = self._get_data_path(path)
     data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata().astype(
                                                                     'float32'))
@@ -460,7 +470,10 @@ class RawBraTS(NiftiDataset):
   @property
   def n_classes(self):
     """ Returns the number of classes of the dataset output. """
-    return 4
+    return 5
+
+  name = 'brats'
+
 
 class RawMRBrainS(NiftiDataset):
   """ MRBrainS13 brain image segmentation challenge (anatomical)
@@ -476,7 +489,6 @@ class RawMRBrainS(NiftiDataset):
     super(RawMRBrainS, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
-    # TODO: rotate data and seg to match orientation across datasets
     data_path = self._get_data_path(path)
     data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata().astype(
                                                                     'float32'))
@@ -504,8 +516,10 @@ class RawMRBrainS(NiftiDataset):
 
   @property
   def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
+    """ Return the number of classes of the dataset output. """
     return 4
+
+  name = 'mrbrains'
 
 
 if __name__ == '__main__':
