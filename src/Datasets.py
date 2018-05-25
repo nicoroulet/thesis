@@ -202,23 +202,10 @@ def preprocess_dataset(dataset, root_dir):
     print('Processing path: %s' % path)
     data, seg = dataset.load_path(path)
 
-    # data_path = dataset._get_data_path(path)
-    # data_img = nib.load(data_path)
-    # preprocessed_data_img = normalize(resample_to_1mm(data_img).get_fdata())
-
-    # seg_paths = dataset._get_seg_paths(path)  #TODO: handle multiple paths
-    # preprocessed_seg_img = []
-    # for seg_path in seg_paths:
-    #   seg_img = nib.load(seg_path)
-    #   preprocessed_seg_img.append(resample_to_1mm(seg_img,
-    #                                         interpolation=linear).get_fdata())
-    # preprocessed_seg_img = sum(preprocessed_seg_img)
-
-    assert(data.shape == seg.shape)
-    np.savez_compressed(root_dir + '/%d' % i,
-                        data=data,
-                        seg=seg)
-
+    assert(data.shape[:-1] == seg.shape[:-1])
+    np.savez(root_dir + '/%d' % i,
+             data=data,
+             seg=seg)
 
 class Dataset:
   """ Abstract Dataset class.
@@ -294,12 +281,24 @@ class NumpyDataset(Dataset):
 
   def load_path(self, path):
     img = np.load(path)
-    data = img[0]
-    seg = img[1]
-    return data.reshape(*data.shape, 1), seg.reshape(*seg.shape, 1)
+    data = img['data']
+    seg = img['seg']
+    return data, seg
 
   def _get_paths(self, root_path):
-    return glob(root_path + '*.npy')
+    return glob(root_path + '*.npz')
+
+# class NumpyDataset(Dataset):
+#   """ Dataset preprocessed by preprocess_dataset function. """
+
+#   def load_path(self, path):
+#     img = np.load(path)
+#     data = img[0]
+#     seg = img[1]
+#     return data.reshape(*data.shape, 1), seg.reshape(*seg.shape, 1)
+
+#   def _get_paths(self, root_path):
+#     return glob(root_path + '*.npy')
 
 
 class ATLAS(NumpyDataset):
@@ -439,24 +438,25 @@ class RawBraTS(NiftiDataset):
     super(RawBraTS, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
-    data_path = self._get_data_path(path)
-    data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata().astype(
-                                                                    'float32'))
-    data = data.reshape(data.shape + (1,))
+    data_paths = self._get_data_path(path)
+    data = [normalize(resample_to_1mm(nib.load(path)
+                                      ).get_fdata().astype('float32'))
+                                      for path in data_paths]
+    data = np.stack(data, axis=-1)
 
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
     seg_path = seg_path[0]
-    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_data()
+    seg = resample_to_1mm(nib.load(seg_path),
+                          interpolation='nearest').get_data()
     seg = seg.reshape(seg.shape + (1,)).astype('int8')
     return (data, seg)
 
   def _get_data_path(self, path):
-    data_path = glob(path + '/*t1.nii.gz')
-    if len(data_path) != 1:
-      print(path, data_path)
-    assert(len(data_path) == 1)  # There should be exactly one deface per dir
-    data_path = data_path[0]
+    data_path = [glob(path + '/*t1.nii.gz')[0],
+                 glob(path + '/*t1ce.nii.gz')[0],
+                 glob(path + '/*t2.nii.gz')[0],
+                 glob(path + '/*flair.nii.gz')[0]]
     return data_path
 
   def _get_seg_paths(self, path):
@@ -476,7 +476,7 @@ class RawBraTS(NiftiDataset):
 
 
 class RawMRBrainS(NiftiDataset):
-  """ MRBrainS13 brain image segmentation challenge (anatomical)
+  """ MRBrainS13 brain image segmentation challenge (anatomical).
 
   Labels:
     1 Cerebrospinal fluid (including ventricles)

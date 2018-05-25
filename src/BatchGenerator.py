@@ -139,10 +139,13 @@ class BatchGenerator(object):
         yield (X.reshape(1, *X.shape),
                Y.reshape(1, *Y.shape))
     while True:
-      batch = (np.zeros((batch_size, *self.patch_shape, 1)),
-               np.zeros((batch_size, *self.patch_shape, 1)))
+      X, Y = next(gen)
+      batch = (np.empty((batch_size, *X.shape)),
+               np.empty((batch_size, *Y.shape)))
+      batch[0][0,...] = X
+      batch[1][0,...] = Y
 
-      for (X, Y), i in zip(gen, range(batch_size)):
+      for (X, Y), i in zip(gen, range(1, batch_size)):
         batch[0][i,...] = X
         batch[1][i,...] = Y
       yield batch
