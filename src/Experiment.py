@@ -14,6 +14,8 @@ from keras.metrics import sparse_categorical_accuracy
 atlas = Datasets.ATLAS()
 brats = Datasets.BraTS()
 mrbrains = Datasets.MRBrainS()
+ibsr = Datasets.IBSR()
+
 tasks = [
          {"name": "tumor",
           "labels": ["necrosis",
@@ -176,6 +178,10 @@ def visualize_multiunet():
 
 # train_unet(mrbrains, epochs=10, steps_per_epoch=10)
 # visualize_unet(mrbrains)
+
+train_unet(ibsr, epochs=20, steps_per_epoch=10)
+# visualize_unet(ibsr)
+
 # train_unet(brats, epochs=40, steps_per_epoch=50, n_channels=4)
 # visualize_unet(brats, n_channels=4)
 

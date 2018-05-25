@@ -185,7 +185,6 @@ def resample_to_1mm(img, interpolation='continuous'):
   """
   return resample_img(img, target_affine=np.eye(3), interpolation=interpolation)
 
-
 def preprocess_dataset(dataset, root_dir):
   """Take a dataset and stores it into memory as plain numpy arrays.
 
@@ -360,6 +359,27 @@ class MRBrainS(NumpyDataset):
   name = 'mrbrains'
 
 
+class IBSR(NumpyDataset):
+  """ IBSR anatomical dataset (v2.0)
+
+  Labels:
+    1 Cerebrospinal fluid (including ventricles)
+    2 Gray matter (cortical gray matter and basal ganglia)
+    3 White matter (including white matter lesions)
+    0 Everyting else
+  """
+  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains/',
+               validation_portion=.2):
+    super(IBSR, self).__init__(root_path, validation_portion)
+
+  @property
+  def n_classes(self):
+    """ Returns the number of classes of the dataset output. """
+    return 4
+
+  name = 'ibsr'
+
+
 class NiftiDataset(Dataset):
   """ Dataset that loads files of NIFTI (.nii) format """
 
@@ -521,8 +541,47 @@ class RawMRBrainS(NiftiDataset):
 
   name = 'mrbrains'
 
+class RawIBSR(NiftiDataset):
+  """Internet Brain Segmentation Repository (IBSR) anatomical dataset v2.0."""
+
+  def __init__(self, root_path='../../data/IBSR_nifti_stripped/',
+               validation_portion=.2):
+    super(RawIBSR, self).__init__(root_path, validation_portion)
+
+  def load_path(self, path):
+    data_path = self._get_data_path(path)
+    data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata().astype(
+                                                                    'float32'))
+
+    seg_path = self._get_seg_paths(path)
+    assert(len(seg_path) == 1)
+    seg_path = seg_path[0]
+    seg = resample_to_1mm(nib.load(seg_path),
+                          interpolation='nearest').get_data().astype('int8')
+    return (data, seg)
+
+  def _get_data_path(self, path):
+    data_path = glob(path + '/*ana_strip.nii.gz')[0]
+    return data_path
+
+  def _get_seg_paths(self, path):
+    # LabelsForTraining.nii contains addidional labels, LabelsForTesting.nii
+    # only the ones mentioned above
+    return glob(path + '/*segTRI_fill_ana.nii.gz')
+
+  def _get_paths(self, root_path):
+    return glob(root_path + '/IBSR*')
+
+  @property
+  def n_classes(self):
+    """ Return the number of classes of the dataset output. """
+    return 4
+
+  name = 'ibsr'
+
 
 if __name__ == '__main__':
-  preprocess_dataset(RawMRBrainS(), '../../data/preprocessed_datasets/mrbrains')
-  preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
-  preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/brats')
+  # preprocess_dataset(RawMRBrainS(), '../../data/preprocessed_datasets/mrbrains')
+  # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
+  # preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/brats')
+  preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/ibsr')
