@@ -59,10 +59,6 @@ class BatchGenerator(object):
     self.patch_multiplicity = patch_multiplicity
 
   @staticmethod
-  def get_labels(Y):
-    return [y for y in range(np.max(Y)) if np.any(Y == y)]
-
-  @staticmethod
   def get_voxel_of_rand_label(Y):
     """Random voxel from the given index, with balanced label probabilities.
 
@@ -81,8 +77,21 @@ class BatchGenerator(object):
         pass
 
   def generate_cuboid(self, volume_shape, contained_voxel):
-    """ Generates a cuboid of patch size containing the given voxel, inside
-        the given volume. """
+    """Generate a cuboid to crop a patch.
+
+    The generated cuboid has dimensions `self.patch size`, containing the given
+        voxel, inside the given volume.
+
+    Args:
+        volume_shape (tuple): tuple depth, width, height. Volume that contains
+            the returned cuboid.
+        contained_voxel (tuple): 3D point z, x, y that will be contained in the
+            returned cuboid
+
+    Returns:
+        tuple: cuboid (x1, x2, y1, y2, z1, z2) that contains `contained_voxel`
+            and is fully contained by `volume_shape`
+    """
     depth, width, height = volume_shape
     patch_depth, patch_width, patch_height = self.patch_shape
     vz, vx, vy = contained_voxel
@@ -99,23 +108,52 @@ class BatchGenerator(object):
     return x1, x2, y1, y2, z1, z2
 
   def crop(self, X, Y):
-    if not (self.transformations & Transformations.CROP):
-      if self.patch_multiplicity > 1:
-        dwh = np.array(X.shape[:-1]).astype('int32')
-        dwh_cropped = (dwh // self.patch_multiplicity) * self.patch_multiplicity
-        zxy1 = (dwh - dwh_cropped) // 2
-        zxy2 = zxy1 + dwh_cropped
-        z1,x1,y1 = zxy1
-        z2,x2,y2 = zxy2
-        return (X[z1:z2, x1:x2, y1:y2, :],
-                Y[z1:z2, x1:x2, y1:y2, :])
-      return X, Y
-    contained_voxel = self.get_voxel_of_rand_label(Y)
-    x1, x2, y1, y2, z1, z2 = self.generate_cuboid(X.shape[:-1], contained_voxel)
-    return (X[z1:z2, x1:x2, y1:y2, :],
-            Y[z1:z2, x1:x2, y1:y2, :])
+    """Crop a patch from image and segmentation volumes.
+
+    If cropping is enabled in `self.transformations`, then a voxel of a random
+    segmentation label is chosen and a box of patch_size around it is cropped
+    from the data and segmentation.
+    Otherwise, the original data and segmentation are returned, only enforcing
+    the the multiplicity set in `self.patch_multiplicity`.
+
+    Args:
+        X (numpy array): data
+        Y (numpy array): segmentation
+
+    Returns:
+        TYPE: Description
+    """
+    if self.transformations & Transformations.CROP:
+      contained_voxel = self.get_voxel_of_rand_label(Y)
+      x1, x2, y1, y2, z1, z2 = self.generate_cuboid(X.shape[:-1],
+                                                    contained_voxel)
+      return (X[z1:z2, x1:x2, y1:y2, :],
+              Y[z1:z2, x1:x2, y1:y2, :])
+    if self.patch_multiplicity > 1:
+      dwh = np.array(X.shape[:-1]).astype('int32')
+      dwh_cropped = (dwh // self.patch_multiplicity) * self.patch_multiplicity
+      zxy1 = (dwh - dwh_cropped) // 2
+      zxy2 = zxy1 + dwh_cropped
+      z1, x1, y1 = zxy1
+      z2, x2, y2 = zxy2
+      return (X[z1:z2, x1:x2, y1:y2, :],
+              Y[z1:z2, x1:x2, y1:y2, :])
+    return X, Y
 
   def add_gaussian_noise(self, patch, sigma=.01):
+    """Add gaussian noise to a given patch.
+
+    This is performed only if `Transformations.NOISE` is enabled in
+    `self.transformations`.
+
+    Args:
+        patch (tuple): (X, Y), data and segmentation patch to which the gaussian
+            noise will be applied. X and Y are numpy arrays.
+        sigma (float, optional): standard deviation of the applied noise
+
+    Returns:
+        tuple: patch with added noise.
+    """
     if not (self.transformations & Transformations.NOISE):
       return patch
     X, Y = patch
@@ -131,6 +169,44 @@ class BatchGenerator(object):
       X[:] = np.flip(X, axis=3)
       Y[:] = np.flip(Y, axis=3)
     return patch
+
+  def get_bounding_box(self, X):
+    """Get the bounding box of an image.
+
+    The bounding box is the smallest box that contains all nonzero elements of
+    the volume. The multiplicity defined by the generator is enforced by
+    enlarging the box if needed.
+
+    Args:
+        X (numpy array): image volume from which to calculate the box
+
+    Returns:
+        tuple: xmin, xmax, ymin, ymax, zmin, zmax, 3D bounding box
+    """
+
+    X = X[0, ...]
+    print("Input shape: ", X.shape)
+
+    # FIXME: this probably gives the [..] interval instead of the [..).
+    out = []
+    for ax in ((1, 2), (0, 2), (0, 1)):
+      collapsed_X = np.any(X, axis=ax)
+      vmin, vmax = np.where(collapsed_X)[0][[0, -1]]
+      print("vmin, vmax: ", vmin, vmax)
+      print("Collapsed: ", collapsed_X.shape)
+      max_size = collapsed_X.shape[0]
+      size = vmax - vmin
+      new_size = size + (self.patch_multiplicity -
+                         size % self.patch_multiplicity)
+      diff = new_size - size
+      # Expand the box to enforce multiplicity, without exceeding the
+      # [0, max_size) interval.
+      new_vmin = max(0, min(vmin - diff // 2, max_size - new_size))
+      new_vmax = min(max_size, new_vmin + new_size)
+      out.extend([new_vmin, new_vmax])
+    print("Bounding box: ", out)
+    print("Multiplicity: ", self.patch_multiplicity)
+    return tuple(out)
 
   def generate_batches(self, batch_size=5):
     gen = self.generate_patches()
