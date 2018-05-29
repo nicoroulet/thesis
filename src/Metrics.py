@@ -1,4 +1,9 @@
+"""Collection of metrics to compare segmentations."""
+
 import keras.backend as K
+from keras.callbacks import Callback
+
+import numpy as np
 
 import tensorflow as tf
 
@@ -11,22 +16,29 @@ import tensorflow as tf
 # Continuous metrics operate on the class scores.
 
 
-class continuous:
+class ContinuousMetrics:
+  """Continuous metrics, tensor-based implementation.
+
+  Can be used for training because gradients can be computed for backpropagation
+  """
 
   @staticmethod
-  def sparse_dice_coef(y_true, y_pred):
-    """ Computes the dice coefficient between two labelings.
+  def dice_coef(y_true, y_pred):
+    """Compute the dice coefficient between two labelings.
+
+    Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
+    tp = true positives, fp = false positives, fn = false negatives.
+    In a multiclass problem we consider all nonzero labels to be positive
+    (0 is background).
 
     Args:
-        y_true: ground truth segmentation, in sparse notation (one category
-                label per voxel)
-        y_pred: predicted segmentation in categorical notation (a per-class
-                score for each voxel)
+        y_true (tensor): ground truth segmentation, in sparse notation (one
+            category label per voxel)
+        y_pred (tensor): predicted segmentation in categorical notation (a
+            per-class score for each voxel)
 
-      Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
-      tp = true positives, fp = false positives, fn = false negatives.
-      In a multiclass problem we consider all nonzero labels to be positive
-      (0 is background).
+    Returns:
+        tensor: coefficient value
     """
     # shape notation: b = batch index, d = depth, w = width, h = height
     # y_true shape: (b, d, w, h, 1)
@@ -59,16 +71,23 @@ class continuous:
     return num / den
 
   @staticmethod
-  def sparse_dice_loss(y_true, y_pred):
-    return 1 - continuous.sparse_dice_coef(y_true, y_pred)
+  def dice_loss(y_true, y_pred):
+    """Dice loss, same as dice coefficient but decreasing."""
+    return 1 - ContinuousMetrics.dice_coef(y_true, y_pred)
 
   @staticmethod
   def mean_dice_coef(ignore_background=True):
-    """ Returns a metric that computes the dice coefficient between two
-    labelings by averaging the dice coefficient of each label against the rest.
+    """Metric that computes the averaged one-versus-all dice coefficient.
+
+    The coefficient between two labelings is computed by averaging the dice
+    coefficient of each label against the rest.
+
     Args:
-        ignore_background: if True, dice for the background label (0) is not
-                           averaged.
+        ignore_background (optional, bool): if True, dice for the background
+            label (0) is not averaged.
+
+    Returns:
+        tensor: coefficient value
     """
     def _mean_dice_coef(y_true, y_pred):
       # y_true is in sparse notation (one category number per voxel), while
@@ -109,57 +128,68 @@ class continuous:
 
   @staticmethod
   def mean_dice_loss(ignore_background=True):
+    """Mean dice loss, same as mean dice coefficient but decreasing."""
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - continuous.mean_dice_coef(ignore_background)(y_true, y_pred)
+      return 1 - ContinuousMetrics.mean_dice_coef(ignore_background)(y_true,
+                                                                     y_pred)
 
     return _mean_dice_loss
 
 ################################################################################
-############################### DISCRETE METRICS ###############################
+############################## DISCRETE METRICS ################################
 ################################################################################
 
 # Discrete metrics operate on the predicted classes.
 
 
-class discrete:
+class DiscreteMetrics:
+  """Discrete metrics, implemented with numpy arrays.
+
+  Cannot be used as training loss. Discrete means it operates on the predicted
+  labels, not the predicted scores.
+  """
+
+  # @staticmethod
+  # def dice_coef(y_true, y_pred):
+  #   """ Compute the dice coefficient between two labelings.
+
+  #   Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
+  #   tp = true positives, fp = false positives, fn = false negatives.
+  #   In a multiclass problem we consider all nonzero labels to be positive
+  #   (0 is background).
+
+  #   Args:
+  #     y_true (Numpy array): ground truth segmentation, in sparse notation (one
+  #       category label per voxel)
+  #       y_pred (Numpy array): predicted segmentation, categorical notation
+  #   """
+
+  #   positive_mask = K.
+  #   positive_mask = (y_true != 0)
+
+  #   tp = np.sum(positive_mask * (y_true == y_pred))
+
+  #   fp_fn = np.sum(y_true != y_pred)
+
+  #   num = 2 * tp
+  #   den = num + fp_fn + 1e-4
+  #   return num / den
+
+  # @staticmethod
+  # def dice_loss(y_true, y_pred):
+  #   """Dice loss, same as dice coefficient but decreasing."""
+  #   return 1 - DiscreteMetrics.dice_coef(y_true, y_pred)
 
   @staticmethod
-  def sparse_dice_coef(y_true, y_pred):
-    """ Computes the dice coefficient between two labelings.
+  def mean_dice_coef(n_classes, ignore_background=True, verbose=False):
+    """Metric that computes the averaged one-versus-all dice coefficient.
+
+    The coefficient between two labelings is computed by averaging the dice
+    coefficient of each label against the rest.
 
     Args:
-        y_true: ground truth segmentation, in sparse notation (one category
-                label per voxel)
-        y_pred: predicted segmentation, in sparse notation
-
-        Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
-        tp = true positives, fp = false positives, fn = false negatives.
-        In a multiclass problem we consider all nonzero labels to be positive
-        (0 is background).
-    """
-
-    positive_mask = K.clip(y_true, 0, 1)
-
-    tp = positive_mask * K.cast(K.equal(y_true, y_pred), 'float')
-    # / K.sum(positive_mask)
-
-    fp_fn = K.cast(K.not_equal(y_true, y_pred), 'float')
-
-    num = 2 * tp
-    den = num + fp_fn + 1e-4
-    return num / den
-
-  @staticmethod
-  def sparse_dice_loss(y_true, y_pred):
-    return 1 - discrete.sparse_dice_coef(y_true, y_pred)
-
-  @staticmethod
-  def mean_dice_coef(n_classes, ignore_background=True):
-    """ Returns a metric that computes the dice coefficient between two
-    labelings by averaging the dice coefficient of each label against the rest.
-
-    Args:
+        n_classes: number of possible distinct labels.
         ignore_background: if True, dice for the background label (0) is not
                            averaged.
     """
@@ -171,11 +201,122 @@ class discrete:
       mean = 0
       for label in labels:
         # label is the positive label.
-        positive_mask = K.cast(K.equal(y_true, label), 'float')
-        correct_mask = K.cast(K.equal(y_pred, label), 'float')
-        tp = K.sum(positive_mask * correct_mask)
+        true_mask = K.cast(K.equal(y_true, label), 'float')
+        pred_mask = K.cast(K.equal(y_pred, label), 'float')
 
-        fp_fn = K.sum(K.cast(K.not_equal(positive_mask, correct_mask), 'float'))
+        tp = K.sum(true_mask * pred_mask)
+        fp = K.sum((1 - true_mask) * pred_mask)
+        fn = K.sum(true_mask * (1 - pred_mask))
+        if verbose:
+          tp = K.print_tensor(tp, message='tp = ')
+          fp = K.print_tensor(fp, message='fp = ')
+          fn = K.print_tensor(fn, message='fn = ')
+        num = 2 * tp
+        den = num + fp + fn + 1e-4
+        coef = num / den
+
+        mean += coef
+      mean *= 1 / n_labels
+      return mean
+
+    return _mean_dice_coef
+
+  @staticmethod
+  def mean_dice_loss(n_classes, ignore_background=True):
+    """Mean dice loss, same as mean dice coefficient but decreasing."""
+
+    def _mean_dice_loss(y_true, y_pred):
+      return 1 - DiscreteMetrics.mean_dice_coef(n_classes,
+                                         ignore_background)(y_true, y_pred)
+
+    return _mean_dice_loss
+
+
+################################################################################
+################################ NUMPY METRICS #################################
+################################################################################
+
+# Numpy metrics receive numpy arrays instead of tensors and operate on the
+# predicted classes.
+
+
+class NumpyMetrics:
+  """Discrete metrics, implemented with numpy arrays.
+
+  Cannot be used as training loss. Discrete means it operates on the predicted
+  labels, not the predicted scores.
+  """
+
+  @staticmethod
+  def accuracy(y_true, y_pred):
+    """Accuracy metric.
+
+    Args:
+        y_true (numpy.array): ground truth labels
+        y_pred (numpy.array): predicted labels
+
+    Returns:
+      float: accuracy
+    """
+
+    assert(y_true.shape == y_pred.shape)
+    return np.sum(y_true == y_pred) / y_true.size
+
+  @staticmethod
+  def dice_coef(y_true, y_pred):
+    """ Compute the dice coefficient between two labelings.
+
+    Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
+    tp = true positives, fp = false positives, fn = false negatives.
+    In a multiclass problem we consider all nonzero labels to be positive
+    (0 is background).
+
+    Args:
+        y_true (Numpy array): ground truth segmentation, in sparse notation (one
+        category label per voxel)
+        y_pred (Numpy array): predicted segmentation, categorical notation
+    """
+
+    positive_mask = (y_true != 0)
+
+    tp = np.sum(positive_mask * (y_true == y_pred))
+
+    fp_fn = np.sum(y_true != y_pred)
+
+    num = 2 * tp
+    den = num + fp_fn + 1e-4
+    return num / den
+
+  @staticmethod
+  def dice_loss(y_true, y_pred):
+    """Dice loss, same as dice coefficient but decreasing."""
+    return 1 - NumpyMetrics.dice_coef(y_true, y_pred)
+
+  @staticmethod
+  def mean_dice_coef(n_classes, ignore_background=True):
+    """Metric that computes the averaged one-versus-all dice coefficient.
+
+    The coefficient between two labelings is computed by averaging the dice
+    coefficient of each label against the rest.
+
+    Args:
+        n_classes: number of possible distinct labels.
+        ignore_background: if True, dice for the background label (0) is not
+                           averaged.
+    """
+    def _mean_dice_coef(y_true, y_pred):
+      # y_true is in sparse notation (one category number per voxel)
+      # y_pred is in sparse notation
+      labels = range(ignore_background, n_classes)
+      n_labels = n_classes - ignore_background
+      mean = 0
+      for label in labels:
+        # label is the positive label.
+        positive_mask = (y_true == label)
+        correct_mask = (y_pred == y_true)
+        tp = np.sum(positive_mask * correct_mask)
+
+        fp_fn = np.sum(positive_mask != correct_mask)
 
         num = 2 * tp
         den = num + fp_fn + 1e-4
@@ -188,127 +329,59 @@ class discrete:
     return _mean_dice_coef
 
   @staticmethod
-  def mean_dice_loss(ignore_background=True):
+  def mean_dice_loss(n_classes, ignore_background=True):
+    """Mean dice loss, same as mean dice coefficient but decreasing."""
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - discrete.mean_dice_coef(ignore_background)(y_true, y_pred)
+      return 1 - NumpyMetrics.mean_dice_coef(n_classes,
+                                         ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
 
-  @staticmethod
-  def to_continuous(loss):
-    def loss_wrapper(y_true, y_pred):
-      # y_true is in sparse notation
-      # y_pred is in categorical notation
-      y_pred_sparse = K.cast(K.expand_dims(K.argmax(y_pred, axis=-1), axis=-1),
-                             'float')
-      return loss(y_true, y_pred_sparse)
 
-    return loss_wrapper
+class FullVolumeValidationCallback(Callback):
+  """Validation callback. Performs full-volume validation every n epochs.
 
+  Validation is performed on CPU to avoid running out of memory.
+  """
 
+  def __init__(self, model, val_generator, validate_every_n_epochs=20):
+    """Callback initialization.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# def sparse_sum_diff(y_true, y_pred):
-#   # return 1 - sparse_dice_coef(y_true, y_pred)
-#   return K.sum(y_true == K.argmax(y_pred)
-
-# def dice_coef(y_true, y_pred):
-#   smooth=1
-#   y_true_f = keras.backend.flatten(y_true)
-#   y_pred_f = keras.backend.flatten(y_pred)
-#   intersection = keras.backend.sum(y_true_f * y_pred_f)
-#   return (2. * intersection + smooth) / (keras.backend.sum(y_true_f) + keras.backend.sum(y_pred_f) + smooth)
-
-# def dice_coef_loss(y_true, y_pred):
-#   return 1 - dice_coef(y_true, y_pred)
-
-# def sparse_mean_dice_loss(y_true, y_pred):
-
-
-def dice_loss(y_true,
-              y_pred,
-              num_classes=2,
-              smooth=1e-5,
-              include_background=True,
-              only_present=False):
-    """Calculates a smooth Dice coefficient loss from sparse labels.
     Args:
-        logits (tf.Tensor): logits prediction for which to calculate
-            crossentropy error
-        labels (tf.Tensor): sparse labels used for crossentropy error
-            calculation
-        num_classes (int): number of class labels to evaluate on
-        smooth (float): smoothing coefficient for the loss computation
-        include_background (bool): flag to include a loss on the background
-            label or not
-        only_present (bool): flag to include only labels present in the
-            inputs or not
-    Returns:
-        tf.Tensor: Tensor scalar representing the loss
+        model (TYPE): Description
+        val_generator (TYPE): Description
+        validate_every_n_epochs (int, optional): Description
+    Attributes:
+        generator (BatchGenerator): Validation batches generator.
+        model: The model being trained.
+        validate_every_n_epochs (int): as CPU validation is slow, full-volume
+            validation is performed every n epochs.
     """
+    self.model = model
+    self.generator = val_generator
+    self.data_samples = val_generator.generate_batches(batch_size=1)
+    self.validate_every_n_epochs = validate_every_n_epochs
 
-    # Get a softmax probability of the logits predictions and a one hot
-    # encoding of the labels tensor
-    probs = y_pred
-    onehot_labels = tf.one_hot(
-        indices=y_true,
-        depth=num_classes,
-        dtype=tf.float32,
-        name='onehot_labels')
+  def on_epoch_end(self, epoch, logs={}):
+    """Perform full-volume validation every n epochs.
 
-    # Compute the Dice similarity coefficient
-    label_sum = tf.reduce_sum(onehot_labels, axis=[1, 2, 3], name='label_sum')
-    pred_sum = tf.reduce_sum(probs, axis=[1, 2, 3], name='pred_sum')
-    intersection = tf.reduce_sum(onehot_labels * probs, axis=[1, 2, 3],
-                                 name='intersection')
-
-    per_sample_per_class_dice = (2. * intersection + smooth)
-    per_sample_per_class_dice /= (label_sum + pred_sum + smooth)
-
-    # Include or exclude the background label for the computation
-    if include_background:
-        flat_per_sample_per_class_dice = tf.reshape(
-            per_sample_per_class_dice, (-1, ))
-        flat_label = tf.reshape(label_sum, (-1, ))
-    else:
-        flat_per_sample_per_class_dice = tf.reshape(
-            per_sample_per_class_dice[:, 1:], (-1, ))
-        flat_label = tf.reshape(label_sum[:, 1:], (-1, ))
-
-    # Include or exclude non-present labels for the computation
-    if only_present:
-        masked_dice = tf.boolean_mask(flat_per_sample_per_class_dice,
-                                      tf.logical_not(tf.equal(flat_label, 0)))
-    else:
-        masked_dice = tf.boolean_mask(
-            flat_per_sample_per_class_dice,
-            tf.logical_not(tf.is_nan(flat_per_sample_per_class_dice)))
-
-    dice = tf.reduce_mean(masked_dice)
-    loss = 1. - dice
-
-    return loss
+    Args:
+        epoch (int): Epoch number.
+        logs (dict, optional): logs include `acc` and `loss`, and optionally
+            include `val_loss` (if validation is enabled in `fit`), and
+            `val_acc` (if validation and accuracy monitoring are enabled).
+    """
+    if epoch % self.validate_every_n_epochs:
+      return
+    X, Y = next(self.data_samples)
+    # FIXME: This is very ad hoc
+    X -= X[0, 0, 0, 0, 0]
+    xmin, xmax, ymin, ymax, zmin, zmax = self.generator.get_bounding_box(X)
+    X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
+    # Y_cropped = Y[xmin:xmax, ymin:ymax, zmin:zmax, :]
+    with tf.device('/cpu:0'):
+      Y_pred_cropped = self.model.predict(X_cropped)
+    Y_pred = np.zeros_like(Y)
+    Y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax, :] = Y_pred_cropped
+    print(NumpyMetrics.dice_coef(Y, Y_pred))

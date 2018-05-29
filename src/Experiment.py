@@ -43,9 +43,9 @@ def train_unet(dataset, epochs=1, steps_per_epoch=20, batch_size=5,
 
   epochs += initial_epoch
 
-  # tr_gen, val_gen = dataset.get_generators(patch_shape,
-  #                                        patch_multiplicity=2**net_depth)
-  tr_gen = dataset.get_train_generator(patch_shape)
+  tr_gen, val_gen = dataset.get_generators(patch_shape,
+                                         patch_multiplicity=2**net_depth)
+  # tr_gen = dataset.get_train_generator(patch_shape)
 
   n_classes = dataset.n_classes
 
@@ -81,13 +81,18 @@ def train_unet(dataset, epochs=1, steps_per_epoch=20, batch_size=5,
                             write_graph=True,
                             write_images=True)
 
+  full_volume_validation = Metrics.FullVolumeValidationCallback(model,
+      val_gen, validate_every_n_epochs=1)
+
   model.fit_generator(tr_gen.generate_batches(batch_size=batch_size),
                       steps_per_epoch=steps_per_epoch,
                       initial_epoch=initial_epoch,
                       epochs=epochs,
                       # validation_data=val_gen.generate_batches(batch_size=1),
                       # validation_steps=5,
-                      callbacks=[model_checkpoint, tensorboard])
+                      callbacks=[model_checkpoint,
+                                 tensorboard,
+                                 full_volume_validation])
 
   open(epoch_file, 'w').write(str(epochs))
   print("Done")
