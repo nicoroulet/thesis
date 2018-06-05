@@ -1,5 +1,6 @@
 """Collection of metrics to compare segmentations."""
 
+import keras
 import keras.backend as K
 from keras.callbacks import Callback
 
@@ -8,6 +9,12 @@ import numpy as np
 import tensorflow as tf
 
 # from medpy.metrics.binary import
+
+import importlib.util
+spec = importlib.util.spec_from_file_location("MetricsMonitor",
+                      "../../blast/blast/cnn/MetricsMonitor.py")
+MetricsMonitor = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(MetricsMonitor)
 
 ################################################################################
 ############################## CONTINUOUS METRICS ##############################
@@ -44,6 +51,8 @@ class ContinuousMetrics:
     # y_true shape: (b, d, w, h, 1)
     # y_pred shape: (b, d, w, h, n_classes)
     n_classes = K.shape(y_pred)[-1]
+    # n_classes = K.print_tensor(n_classes, message="n_classes = ")
+
     # y_true_int shape: (b, d, w, h)
     y_true_int = K.cast(K.squeeze(y_true, axis=-1), 'int32')
 
@@ -68,6 +77,8 @@ class ContinuousMetrics:
 
     num = 2 * tp
     den = num + fn + fp + 1e-4
+    # num = K.print_tensor(num, message="num = ")
+    # den = K.print_tensor(den, message="den = ")
     return num / den
 
   @staticmethod
@@ -345,7 +356,8 @@ class FullVolumeValidationCallback(Callback):
   Validation is performed on CPU to avoid running out of memory.
   """
 
-  def __init__(self, model, val_generator, validate_every_n_epochs=20):
+  def __init__(self, model, val_generator, metrics_savefile,
+               validate_every_n_epochs=20):
     """Callback initialization.
 
     Args:
@@ -358,10 +370,15 @@ class FullVolumeValidationCallback(Callback):
         validate_every_n_epochs (int): as CPU validation is slow, full-volume
             validation is performed every n epochs.
     """
-    self.model = model
+    self.original_model = model
+    with tf.device('/cpu:0'):
+      self.validation_model = keras.models.clone_model(model)
+    self.labels = list(range(1, model.n_classes))
     self.generator = val_generator
     self.data_samples = val_generator.generate_batches(batch_size=1)
     self.validate_every_n_epochs = validate_every_n_epochs
+    self.history = []
+    self.metrics_savefile = metrics_savefile
 
   def on_epoch_end(self, epoch, logs={}):
     """Perform full-volume validation every n epochs.
@@ -374,14 +391,34 @@ class FullVolumeValidationCallback(Callback):
     """
     if epoch % self.validate_every_n_epochs:
       return
+    # Copy weights from trained model.
+    self.validation_model.set_weights(self.original_model.get_weights())
+    # Evaluate model in full volume.
     X, Y = next(self.data_samples)
-    # FIXME: This is very ad hoc
-    X -= X[0, 0, 0, 0, 0]
     xmin, xmax, ymin, ymax, zmin, zmax = self.generator.get_bounding_box(X)
     X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
-    # Y_cropped = Y[xmin:xmax, ymin:ymax, zmin:zmax, :]
-    with tf.device('/cpu:0'):
-      Y_pred_cropped = self.model.predict(X_cropped)
+    Y_pred_cropped = self.validation_model.predict(X_cropped)
+    Y = np.squeeze(Y, axis=-1)
     Y_pred = np.zeros_like(Y)
-    Y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax, :] = Y_pred_cropped
-    print(NumpyMetrics.dice_coef(Y, Y_pred))
+    print("shapes:", Y_pred_cropped.shape, Y_pred.shape, Y.shape)
+    Y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = np.argmax(Y_pred_cropped,
+                                                           axis=-1)
+    metrics = MetricsMonitor.MetricsMonitor.getMetricsForWholeSegmentation(Y,
+                                            Y_pred,
+                                            labels=self.labels)
+    print(metrics)
+    self.history.append(metrics)
+
+  def on_train_end(self, epoch, logs=None):
+    """Append new metrics to previous ones.
+
+    Args:
+        epoch (int): epoch number
+        logs (dict, optional): Dictionary of logs (unused)
+    """
+    try:
+      previous_metrics = np.load(self.metrics_savefile)
+      metrics = np.append(previous_metrics, self.history)
+    except:
+      metrics = np.stack(self.history)
+    np.save(self.metrics_savefile, metrics)
