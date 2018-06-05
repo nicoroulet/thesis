@@ -1,3 +1,10 @@
+"""Collection of Brain datasets.
+
+- MRBrainS (anatomical).
+- IBSR (anatomical).
+- BraTS (tumors).
+- ATLAS (stroke lesion).
+"""
 from glob import glob
 import nibabel as nib
 import numpy as np
@@ -9,155 +16,6 @@ from BatchGenerator import AsyncBatchGenerator, Transformations,  \
                            FetcherGenerator
 
 
-# Deprecate IBSR
-# class IBSR:
-
-#   n_classes = 4
-
-#   def __init__(self, from_pickle=True, path=None):
-#     self.subjects = {}
-#     if from_pickle:
-#       if path is None:
-#         self.load_pickle()
-#       else:
-#         self.load_pickle(path)
-#     else:
-#       if path is None:
-#         self.load_raw()
-#       else:
-#         self.load_raw(path)
-
-#   def load_pickle(self, path='ibsr.pkl'):
-#     """ Load IBSR dataset from a pikled version, with the offsets aligned. """
-#     f = open(path, 'rb')
-#     self.subjects = pickle.load(f)
-#     f.close()
-#     return self
-
-#   def load_raw(self, root_path='../../data/NITRC-ibsr-Downloads/'):
-#     """ Load IBSR dataset from the raw data dowloaded from the IBSR repo. """
-
-#     # Values taken from the ibsr readme, adjusted based on the starting index of
-#     # each scan
-#     offsets = {
-#         '1_24'  : 0,
-#         '2_4'   : 6,
-#         '5_8'   : 1,
-#         '4_8'   : 2,
-#         '6_10'  : 0,
-#         '7_8'   : 0,
-#         '8_4'   : 2,
-#         '11_3'  : 1,
-#         '12_3'  : 0,
-#         '13_3'  : 0,
-#         '15_3'  : 0,
-#         '16_3'  : 0,
-#         '17_3'  : 3,
-#         '100_23': 0,
-#         '110_3' : 2,
-#         '111_2' : 3,
-#         '112_2' : 1,
-#         '191_3' : 3,
-#         '202_3' : 3,
-#         '205_3' : 2
-#     }
-
-#     def get_IBSR_paths(root_path=''):
-#       """ Returns the paths for the proper files in containing the IBSR dataset.
-#       Paths are structured in a dict of {scan_id : (data_files,
-#       segmentation_file)}.
-#       Notice that images come in one layer per file, while segmentation comes in
-#       a single file for all layers. """
-
-#       data_dirs = sorted(glob(root_path + '20Normals_T1/20Normals_T1/*'))
-#       def get_scan_id(path):
-#         """ Given a data directory, returns the scan number.
-#             In this case, it's the name of the directory. """
-#         return path.split('/')[-1]
-
-#       paths = {}
-#       for data_dir in data_dirs:
-#         scan_id = get_scan_id(data_dir)
-#         data = sorted(glob(data_dir + '/*'),
-#                       key=lambda s: int(s[:-4].split('_')[-1]))
-#         seg = '%s20Normals_T1_seg/20Normals_T1_seg/%s.buchar' % (root_path,
-#                                                                  scan_id)
-#         paths[scan_id] = data, seg
-#       return paths
-
-
-#     def load_volumetric_image(data_paths):
-#       """ Create a single 3D matrix from a list of files containing one layer
-#       each.
-#       Files are 16-bit raw images, big-endian (thus the '>i2') """
-#       return np.array([np.fromfile(path, dtype='>i2')
-#                           for path in data_paths]).reshape((-1, 256, 256, 1))
-
-#     def load_buchar(path):
-#       """ Load a buchar file containing the segmentation information. """
-#       seg = np.fromfile(path, dtype='uint8').reshape((-1, 256, 256, 1))
-#       translate_labels = lambda x: {0:0, 128:1, 192:2, 254:3}[x]
-#       seg = np.vectorize(translate_labels)(seg)
-#       return seg
-
-#     def load_path(scan_id):
-#       print('Loading scan', scan_id)
-#       data, seg = paths[scan_id]
-#       # Apply offsets between data layers and segmentation layers.
-#       data, seg = (load_volumetric_image(data), load_buchar(seg))
-#       start = offsets[scan_id]
-#       end = start + seg.shape[0]
-#       data = data[start:end,:,:]
-#       try:
-#         assert(data.shape[:-1] == seg.shape[:-1])
-#       except AssertionError:
-#         print('%s:\tdata and seg have different shapes %s and %s' %
-#               (scan_id, data.shape, seg.shape))
-#       return scan_id, (data, seg)
-
-
-#     paths = get_IBSR_paths(root_path)
-
-#     subjects = dict(load_path(scan_id) for scan_id in paths)
-
-#     self.subjects = subjects
-#     return self
-
-#   def save_pickle(self, path='ibsr.pkl'):
-#     f = open(path, 'wb')
-#     pickle.dump(self.subjects, f)
-#     f.close()
-
-#   def get_X(self):
-#     return [data for data, _ in self.subjects.values()]
-
-#   def get_Y(self):
-#     return [seg for _, seg in self.subjects.values()]
-
-
-# class TrainableDataset:
-
-#   def __init__(self, dataset, validation_portion=.2, normalize=True):
-#     X = dataset.get_X()
-#     n = len(X)
-#     if normalize:
-#       for i in range(n):
-#         X[i] = (X[i] - np.mean(X[i])) / np.std(X[i])
-
-#     Y = dataset.get_Y()
-
-#     val_n = int(n * validation_portion)
-#     # Last val_n samples are used as validation
-#     self.X_train = X[:-val_n]
-#     self.Y_train = Y[:-val_n]
-#     self.X_val = X[-val_n:]
-#     self.Y_val = Y[-val_n:]
-
-# if __name__ == '__main__':
-#   """ Load raw dataset and save to pickle """
-#   dataset = IBSR(from_pickle=False)
-#   dataset.save_pickle()
-
 def normalize(X):
   """Normalize a given image.
 
@@ -167,7 +25,7 @@ def normalize(X):
   Returns:
       Numpy array: normalized image
   """
-  X -= np.mean(X)
+  # X -= np.mean(X)
   X /= np.std(X)
   return X
 
@@ -185,6 +43,7 @@ def resample_to_1mm(img, interpolation='continuous'):
   """
   return resample_img(img, target_affine=np.eye(3), interpolation=interpolation)
 
+
 def preprocess_dataset(dataset, root_dir):
   """Take a dataset and stores it into memory as plain numpy arrays.
 
@@ -197,14 +56,23 @@ def preprocess_dataset(dataset, root_dir):
   if not os.path.exists(root_dir):
     os.makedirs(root_dir)
 
-  for i, path in enumerate(dataset.train_paths + dataset.val_paths):
+  # Shuffle paths in order to guarrantee that training/validation portions are
+  # random and not determined by some arbitrary property like file names.
+  # Note that when loading the dataset, the partition will not be random, only
+  # when preprocessing it.
+  paths = dataset.train_paths + dataset.val_paths
+  np.random.shuffle(paths)
+
+  for i, path in enumerate(paths):
+    save_path = root_dir + '/%d' % i
     print('Processing path: %s' % path)
     data, seg = dataset.load_path(path)
 
     assert(data.shape[:-1] == seg.shape[:-1])
-    np.savez(root_dir + '/%d' % i,
+    np.savez(save_path,
              data=data,
              seg=seg)
+
 
 class Dataset:
   """ Abstract Dataset class.
@@ -226,22 +94,18 @@ class Dataset:
     raise NotImplementedError()
 
   def _get_paths(self, root_path):
-    """ Get a meaningful path to each sample from the root path """
-    raise NotImplementedError()
-
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
+    """Get a meaningful path to each sample from the root path."""
     raise NotImplementedError()
 
   @property
   def n_images(self):
     return len(self.train_paths) + len(self.val_paths)
 
-  def get_train_generator(self, patch_shape):
+  def get_train_generator(self, patch_shape, **kwargs):
     return AsyncBatchGenerator(patch_shape,
                                self.train_paths,
-                               self.load_path)
+                               self.load_path,
+                               **kwargs)
 
   def get_val_generator(self, patch_multiplicity):
     return AsyncBatchGenerator(None,
@@ -308,10 +172,7 @@ class ATLAS(NumpyDataset):
                validation_portion=.2):
     super(ATLAS, self).__init__(root_path, validation_portion)
 
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
-    return 2
+  n_classes = 2
 
   name = 'atlas'
 
@@ -330,10 +191,7 @@ class BraTS(NumpyDataset):
                validation_portion=.2):
     super(BraTS, self).__init__(root_path, validation_portion)
 
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
-    return 5
+  n_classes = 5
 
   name = 'brats'
 
@@ -351,10 +209,7 @@ class MRBrainS(NumpyDataset):
                validation_portion=.2):
     super(MRBrainS, self).__init__(root_path, validation_portion)
 
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
-    return 4
+  n_classes = 4
 
   name = 'mrbrains'
 
@@ -368,14 +223,11 @@ class IBSR(NumpyDataset):
     3 White matter (including white matter lesions)
     0 Everyting else
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/ibsr/',
                validation_portion=.2):
     super(IBSR, self).__init__(root_path, validation_portion)
 
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
-    return 4
+  n_classes = 4
 
   name = 'ibsr'
 
@@ -425,7 +277,7 @@ class RawATLAS(NiftiDataset):
     return (data, seg)
 
   def _get_data_path(self, path):
-    data_path = glob(path + '/*deface*')
+    data_path = glob(path + '/*deface_stx_robex*')
     assert(len(data_path) == 1)  # There should be exactly one deface per dir
     data_path = data_path[0]
     return data_path
@@ -436,10 +288,7 @@ class RawATLAS(NiftiDataset):
   def _get_paths(self, root_path):
     return glob(root_path + '*/*/*')
 
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
-    return 2
+  n_classes = 2
 
   name = 'atlas'
 
@@ -487,10 +336,7 @@ class RawBraTS(NiftiDataset):
     # That might not be ideal.
     return glob(root_path + '*/*')
 
-  @property
-  def n_classes(self):
-    """ Returns the number of classes of the dataset output. """
-    return 5
+  n_classes = 5
 
   name = 'brats'
 
@@ -534,12 +380,10 @@ class RawMRBrainS(NiftiDataset):
   def _get_paths(self, root_path):
     return glob(root_path + 'TrainingData/*')
 
-  @property
-  def n_classes(self):
-    """ Return the number of classes of the dataset output. """
-    return 4
+  n_classes = 4
 
   name = 'mrbrains'
+
 
 class RawIBSR(NiftiDataset):
   """Internet Brain Segmentation Repository (IBSR) anatomical dataset v2.0."""
@@ -550,9 +394,11 @@ class RawIBSR(NiftiDataset):
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
-    data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata().astype(
+    data = normalize(resample_to_1mm(nib.load(data_path[0])).get_fdata().astype(
                                                                     'float32'))
 
+    data *= resample_to_1mm(nib.load(data_path[1]),
+                            interpolation='nearest').get_fdata()
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
     seg_path = seg_path[0]
@@ -561,7 +407,9 @@ class RawIBSR(NiftiDataset):
     return (data, seg)
 
   def _get_data_path(self, path):
-    data_path = glob(path + '/*ana_strip.nii.gz')[0]
+    # The first data path is the image, the second the brainmask.
+    data_path = [glob(path + '/*ana_strip.nii.gz')[0],
+                 glob(path + '/*brainmask.nii.gz')[0]]
     return data_path
 
   def _get_seg_paths(self, path):
@@ -572,10 +420,7 @@ class RawIBSR(NiftiDataset):
   def _get_paths(self, root_path):
     return glob(root_path + '/IBSR*')
 
-  @property
-  def n_classes(self):
-    """ Return the number of classes of the dataset output. """
-    return 4
+  n_classes = 4
 
   name = 'ibsr'
 
