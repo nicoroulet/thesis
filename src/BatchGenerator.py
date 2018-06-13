@@ -33,33 +33,72 @@ class Transformations:
   ALL = (1 << 3) - 1
 
 
-class BatchGenerator(object):
-  """Basic batch generator. Uses a dataset that is loaded into memory.
+class FetcherThread(threading.Thread):
+  """Thread that fetches full images from disk and puts them in a queue.
 
-  Attributes:
-      dataset (Dataset): The dataset from which to generate batches.
-      patch_multiplicity (int): multiplicity forced to patch dimensions.
-          Useful for validation patches (without cropping)
-      patch_shape (tuple): shape of the sampled patches
-      transformations (Transformation): transformations to apply to generate
-          patches.
+  Images on disk should be normalized.
+  TODO: make this part more robust to non-normalized images.
   """
 
-  def __init__(self,
-               dataset,
-               patch_shape,
-               transformations=Transformations.ALL,
-               patch_multiplicity=1):
-    """ Initialize batch generator.
+  def __init__(self, loader_function, paths, queue):
+    """ Initialize the Thread that fetches images.
 
     Args:
-        dataset: object that contains X_train, Y_train, X_val, Y_val
-        patch_shape: patch depth, width, height
+      loader_function: function that receives a path and returns a tuple
+                       (data, segmentation), both as numpy arrays.
+      paths: the list of paths to all elements of the dataset.
+      queue: the queue where the data is stored.
     """
-    self.dataset = dataset
+    super(FetcherThread, self).__init__()
+    self.loader_function = loader_function
+    self.paths = paths
+    self.queue = queue
+    self.daemon = True
+
+  def run(self):
+    """Thread execution routine."""
+    while (True):
+      self.queue.put(self.loader_function(np.random.choice(self.paths)))
+
+
+class BatchGenerator:
+  """ Asynchronous batch generator.
+
+  Does not require the dataset to be loaded in memory.
+  Uses a separate thread to load images from disk, and keeps them in a queue.
+  """
+
+  def __init__(self, patch_shape, paths, loader_function, max_queue_size=10,
+               pool_size=5, pool_refresh_period=20,
+               transformations=Transformations.ALL,
+               patch_multiplicity=1):
+    """Initialize the thread that fetches objects in the queue.
+
+    Args:
+        patch_shape: shape of the patches to be generated.
+        paths: see FetcherThread.__init__ args.
+        loader_function: see FetcherThread.__init__ args.
+        max_queue_size: the maximum size of the queue, the secondary thread
+                        will block once the queue is full.
+        pool_size: number of images kept simultaneously.
+        transformations: defines which transformations will be applied to images
+                         in order to generate images.
+        patch_multiplicity (int, optional): multiplicity forced to patch dims.
+    """
     self.patch_shape = patch_shape
+    self.queue = queue.Queue(maxsize=max_queue_size)
+    self.thread = FetcherThread(loader_function, paths, self.queue)
+    self.thread.start()
+    self.pool = []
+    self.pool_size = pool_size
+    self.pool_refresh_period = pool_refresh_period
+    self.pool.append(self.queue.get())
+    self.queue.task_done()
+    self.cycle = itertools.cycle(range(pool_size))
     self.transformations = transformations
     self.patch_multiplicity = patch_multiplicity
+
+    # self.patch_generator = self.generate_patches()
 
   @staticmethod
   def get_voxel_of_rand_label(Y, sub_volume):
@@ -236,13 +275,8 @@ class BatchGenerator(object):
       for X, Y in gen:
         yield (X.reshape(1, *X.shape),
                Y.reshape(1, *Y.shape))
-    total_count = 0
-    nonzero_count = 0
     while True:
       X, Y = next(gen)
-      nonzero_count += np.any(Y)
-      total_count += 1
-      # print('Total:', total_count, 'NZ:', nonzero_count, np.sum(Y))
       batch = (np.empty((batch_size, *X.shape)),
                np.empty((batch_size, *Y.shape)))
       batch[0][0, ...] = X
@@ -252,84 +286,6 @@ class BatchGenerator(object):
         batch[0][i, ...] = X
         batch[1][i, ...] = Y
       yield batch
-
-  def generate_patches(self):
-    """ Generate a batch of patches from the dataset. """
-    n = len(self.dataset.X_train)
-    while (1):
-      idx = np.random.randint(n)
-      X = self.dataset.X_train[idx]
-      Y = self.dataset.Y_train[idx]
-      yield self.maybe_flip(
-              self.add_gaussian_noise(
-                  self.crop(X, Y)))
-
-
-class FetcherThread(threading.Thread):
-  """Thread that fetches full images from disk and puts them in a queue.
-
-  Images on disk should be normalized.
-  TODO: make this part more robust to non-normalized images.
-  """
-
-  def __init__(self, loader_function, paths, queue):
-    """ Initialize the Thread that fetches images.
-
-    Args:
-      loader_function: function that receives a path and returns a tuple
-                       (data, segmentation), both as numpy arrays.
-      paths: the list of paths to all elements of the dataset.
-      queue: the queue where the data is stored.
-    """
-    super(FetcherThread, self).__init__()
-    self.loader_function = loader_function
-    self.paths = paths
-    self.queue = queue
-    self.daemon = True
-
-  def run(self):
-    while (True):
-      self.queue.put(self.loader_function(np.random.choice(self.paths)))
-
-
-class AsyncBatchGenerator(BatchGenerator):
-  """ Asynchronous batch generator.
-
-  Does not require the dataset to be loaded in memory.
-  Uses a separate thread to load images from disk, and keeps them in a queue.
-  """
-
-  def __init__(self, patch_shape, paths, loader_function, max_queue_size=10,
-               pool_size=5, pool_refresh_period=20,
-               transformations=Transformations.ALL,
-               patch_multiplicity=1):
-    """Initialize the thread that fetches objects in the queue.
-
-    Args:
-        patch_shape: shape of the patches to be generated.
-        paths: see FetcherThread.__init__ args.
-        loader_function: see FetcherThread.__init__ args.
-        max_queue_size: the maximum size of the queue, the secondary thread
-                        will block once the queue is full.
-        pool_size: number of images kept simultaneously.
-        transformations: defines which transformations will be applied to images
-                         in order to generate images.
-        patch_multiplicity (int, optional): multiplicity forced to patch dims.
-    """
-    self.patch_shape = patch_shape
-    self.queue = queue.Queue(maxsize=max_queue_size)
-    self.thread = FetcherThread(loader_function, paths, self.queue)
-    self.thread.start()
-    self.pool = []
-    self.pool_size = pool_size
-    self.pool_refresh_period = pool_refresh_period
-    # for _ in range(pool_size):
-    self.pool.append(self.queue.get())
-    self.queue.task_done()
-    # print('pool', len(self.pool))
-    self.cycle = itertools.cycle(range(pool_size))
-    self.transformations = transformations
-    self.patch_multiplicity = patch_multiplicity
 
   def generate_patches(self):
     while (True):
@@ -345,39 +301,6 @@ class AsyncBatchGenerator(BatchGenerator):
       if len(self.pool) < self.pool_size:
         self.pool.append(self.queue.get())
         self.queue.task_done()
-
-
-class GeneratorThread(threading.Thread):
-
-  def __init__(self, batch_generator, queue):
-    """ Eagerly generates batches and stores them in a queue.
-
-    Args:
-      batch_generator: generator used to produce the batches.
-    """
-    super(GeneratorThread, self).__init__()
-    self.batch_generator = batch_generator
-    self.queue = queue
-    self.daemon = True
-
-  def run(self):
-    while (True):
-      self.queue.put(next(self.batch_generator))
-
-
-class FetcherGenerator:
-
-  def __init__(self, batch_size, *args, **kwargs):
-    generator = AsyncBatchGenerator(*args, **kwargs).generate_batches(batch_size)
-    self.queue = queue.Queue(maxsize=10)
-    self.thread = GeneratorThread(generator, self.queue)
-    self.thread.start()
-
-  def generate_batches(self, *args, **kwargs):
-    while (True):
-      batch = self.queue.get()
-      self.queue.task_done()
-      yield batch
 
 
 if __name__ == '__main__':

@@ -11,9 +11,7 @@ import numpy as np
 import pickle
 from nilearn.image import resample_img
 
-
-from BatchGenerator import AsyncBatchGenerator, Transformations,  \
-                           FetcherGenerator
+from BatchGenerator import BatchGenerator, Transformations
 
 
 def normalize(X):
@@ -108,14 +106,14 @@ class Dataset:
                           pool_refresh_period=20,
                           transformations=Transformations.ALL,
                           patch_multiplicity=1):
-    return AsyncBatchGenerator(patch_shape,
-                               self.train_paths,
-                               self.load_path,
-                               max_queue_size=max_queue_size,
-                               pool_size=pool_size,
-                               pool_refresh_period=pool_refresh_period,
-                               transformations=transformations,
-                               patch_multiplicity=patch_multiplicity)
+    return BatchGenerator(patch_shape,
+                          self.train_paths,
+                          self.load_path,
+                          max_queue_size=max_queue_size,
+                          pool_size=pool_size,
+                          pool_refresh_period=pool_refresh_period,
+                          transformations=transformations,
+                          patch_multiplicity=patch_multiplicity)
 
   def get_val_generator(self,
                         patch_shape=None,
@@ -124,14 +122,14 @@ class Dataset:
                         pool_refresh_period=1,
                         transformations=Transformations.NONE,
                         patch_multiplicity=1):
-    return AsyncBatchGenerator(patch_shape,
-                               self.val_paths,
-                               self.load_path,
-                               max_queue_size=max_queue_size,
-                               pool_size=pool_size,
-                               pool_refresh_period=pool_refresh_period,
-                               transformations=transformations,
-                               patch_multiplicity=patch_multiplicity)
+    return BatchGenerator(patch_shape,
+                          self.val_paths,
+                          self.load_path,
+                          max_queue_size=max_queue_size,
+                          pool_size=pool_size,
+                          pool_refresh_period=pool_refresh_period,
+                          transformations=transformations,
+                          patch_multiplicity=patch_multiplicity)
 
   # def get_train_generator(self, patch_shape):
   #   return FetcherGenerator(5, patch_shape,

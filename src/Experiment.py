@@ -244,12 +244,12 @@ def visualize_multiunet():
 # validate_unet(ibsr, val_steps=10)
 # visualize_unet(ibsr)
 
-# train_unet(brats, epochs=1, steps_per_epoch=200, n_channels=4)
+train_unet(brats, epochs=1, steps_per_epoch=200, n_channels=4)
 # visualize_unet(brats, n_channels=4)
 
 # train_unet(atlas, epochs=4, steps_per_epoch=10000, patch_shape=(32, 32, 32), batch_size=10)
 # validate_unet(atlas, val_steps=10)
-visualize_unet(atlas)
+# visualize_unet(atlas)
 
 # train_multiunet(epochs=200, steps_per_epoch=50)
 # test_multiunet()
