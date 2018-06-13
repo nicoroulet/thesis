@@ -101,17 +101,36 @@ class Dataset:
   def n_images(self):
     return len(self.train_paths) + len(self.val_paths)
 
-  def get_train_generator(self, patch_shape, **kwargs):
+  def get_train_generator(self,
+                          patch_shape=(32, 32, 32),
+                          max_queue_size=5,
+                          pool_size=5,
+                          pool_refresh_period=20,
+                          transformations=Transformations.ALL,
+                          patch_multiplicity=1):
     return AsyncBatchGenerator(patch_shape,
                                self.train_paths,
                                self.load_path,
-                               **kwargs)
+                               max_queue_size=max_queue_size,
+                               pool_size=pool_size,
+                               pool_refresh_period=pool_refresh_period,
+                               transformations=transformations,
+                               patch_multiplicity=patch_multiplicity)
 
-  def get_val_generator(self, patch_multiplicity):
-    return AsyncBatchGenerator(None,
+  def get_val_generator(self,
+                        patch_shape=None,
+                        max_queue_size=2,
+                        pool_size=1,
+                        pool_refresh_period=1,
+                        transformations=Transformations.NONE,
+                        patch_multiplicity=1):
+    return AsyncBatchGenerator(patch_shape,
                                self.val_paths,
                                self.load_path,
-                               transformations=Transformations.NONE,
+                               max_queue_size=max_queue_size,
+                               pool_size=pool_size,
+                               pool_refresh_period=pool_refresh_period,
+                               transformations=transformations,
                                patch_multiplicity=patch_multiplicity)
 
   # def get_train_generator(self, patch_shape):
@@ -126,17 +145,45 @@ class Dataset:
   #                              transformations=Transformations.NONE,
   #                              patch_multiplicity=patch_multiplicity)
 
-  def get_generators(self, patch_shape, patch_multiplicity=1):
-    """ Get both training generator and validation generator.
-        The training generator crops images and applies augmentation,
-        the validation generator doesn't.
+  def get_patch_generators(self, patch_shape):
+    """Get both training generator and validation patched batch generators.
+
+    Both crop patches from the images. The training generator also applies
+    augmentation (gaussian noise and random flipping).
+
     Args:
         patch_shape: dimensions of the training patches.
-        patch_multiplicity: validation patches are only cropped to have dims
-                            multiples of this value.
+
+    Returns:
+        tuple: `train_generator`, `val_generator`.
     """
-    return (self.get_train_generator(patch_shape),
-            self.get_val_generator(patch_multiplicity))
+    return (self.get_train_generator(patch_shape=patch_shape),
+            self.get_val_generator(patch_shape=patch_shape,
+                                   max_queue_size=3,
+                                   pool_size=5,
+                                   pool_refresh_period=20,
+                                   transformations=Transformations.CROP))
+
+  def get_full_volume_generators(self, patch_multiplicity=1):
+    """Get both training generator and validation full volume batch generators.
+
+    Both yield full-volume images, without augmentation.
+
+    Args:
+        patch_multiplicity (int, optional): Enforced multiplicity of image
+            dimensions
+
+    Returns:
+        tuple: `train_generator`, `val_generator`.
+    """
+    print('Full volume patchmul:', patch_multiplicity)
+    return (self.get_train_generator(patch_shape=None,
+                                     max_queue_size=2,
+                                     pool_size=1,
+                                     pool_refresh_period=1,
+                                     transformations=Transformations.NONE,
+                                     patch_multiplicity=patch_multiplicity),
+            self.get_val_generator(patch_multiplicity=patch_multiplicity))
 
 
 class NumpyDataset(Dataset):
@@ -168,6 +215,7 @@ class ATLAS(NumpyDataset):
   """ Anatomical Tracing of Lesions After Stroke (ATLAS) dataset wrapper.
   TODO: unclear what the segmentation values mean.
   """
+
   def __init__(self, root_path='../../data/preprocessed_datasets/atlas/',
                validation_portion=.2):
     super(ATLAS, self).__init__(root_path, validation_portion)
@@ -427,6 +475,6 @@ class RawIBSR(NiftiDataset):
 
 if __name__ == '__main__':
   # preprocess_dataset(RawMRBrainS(), '../../data/preprocessed_datasets/mrbrains')
-  # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
+  preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
   # preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/brats')
-  preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/ibsr')
+  # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/ibsr')

@@ -6,8 +6,10 @@ import Metrics
 
 import numpy as np
 
+# import tensorflow as tf
+
 from keras.layers import Input, Conv3D, Conv3DTranspose, MaxPooling3D, \
-                         concatenate
+                         concatenate, Add, Dropout, BatchNormalization
 from keras.models import Model
 from keras.callbacks import ModelCheckpoint
 
@@ -49,12 +51,15 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
   # Convolution layers
   for layer in range(depth - 1):
     x = Conv3D(filters=n_filters, **conv_params)(x)
+    x = BatchNormalization()(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
+    x = BatchNormalization()(x)
     layer_outputs.append(x)
     x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     n_filters *= 2
 
   # Bottom layers
+  x = Dropout(.3)(x)
   x = Conv3D(filters=n_filters, **conv_params)(x)
   x = Conv3D(filters=n_filters, **conv_params)(x)
 
@@ -63,12 +68,17 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
     n_filters //= 2
     x = Conv3DTranspose(filters=n_filters, kernel_size=(2, 2, 2),
                         strides=(2, 2, 2))(x)
-    x = concatenate([x, layer_outputs.pop()])
+    x = Add()([x, layer_outputs.pop()])
+    # x = concatenate([x, layer_outputs.pop()])
     x = Conv3D(filters=n_filters, **conv_params)(x)
+    x = BatchNormalization()(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
+    x = BatchNormalization()(x)
 
   # Final layer
-  x = Conv3D(filters=n_classes, kernel_size=(1, 1, 1), padding='same',
+  x = Conv3D(filters=n_classes,
+             kernel_size=(1, 1, 1),
+             padding='same',
              activation='softmax')(x)
 
   return inputs, x
@@ -97,6 +107,28 @@ class UNet(Model):
     self.n_classes = n_classes
     self.depth = depth
     self.base_filters = base_filters
+    self.patch_multiplicity = 2 ** depth
+
+  def predict_generator(self, generator, steps=1):
+    """Generate predictions for full volume images generator.
+
+    Args:
+        generator (BatchGenerator): Full volume batch generator.
+        steps (int): number of images to evaluate
+
+    Yields:
+        tuple: (ground truth, prediction), both categorically encoded.
+    """
+    data_samples = generator.generate_batches(batch_size=1)
+    for i in range(steps):
+      x, y = next(data_samples)
+      xmin, xmax, ymin, ymax, zmin, zmax = generator.get_bounding_box(x)
+      x_cropped = x[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
+      y_pred_cropped = self.predict(x_cropped)
+      y = np.squeeze(y, axis=-1)
+      y_pred = np.zeros_like(y)
+      y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = np.argmax(y_pred_cropped, axis=-1)
+      yield y, y_pred
 
 
 class MultiUNet:
@@ -142,11 +174,11 @@ class MultiUNet:
       self.labels.append(task["labels"])
       self.nets[name] = UNet.UNet(n_classes)
       self.nets[name].compile(
-                    # loss=Metrics.continuous.sparse_dice_loss,
-                    loss='sparse_categorical_crossentropy',
+                    loss=Metrics.continuous.dice_loss,
+                    # loss='sparse_categorical_crossentropy',
                     optimizer='adam',
                     metrics=['accuracy',
-                             Metrics.continuous.sparse_dice_coef,
+                             Metrics.continuous.dice_coef,
                              Metrics.continuous.mean_dice_coef()])
 
       savedir = "weights"
@@ -159,7 +191,7 @@ class MultiUNet:
 
       model_checkpoint = ModelCheckpoint(savefile,
                                          monitor='loss',
-                                         save_best_only=True)
+                                         save_best_only=False)
 
       self.callbacks[name] = [model_checkpoint]
 
@@ -199,7 +231,7 @@ class MultiUNet:
         generator: Batch generator used for evaluation. Important: labels used
             in the segmentation yielded by the generator should match those in
             self.labels, in the same order.
-        metrics (list): list of metrics to uvaluate on. Each metric is a
+        metrics (list): list of metrics to evaluate on. Each metric is a
             function that takes y_true, y_pred and returns a value
         steps (5, optional): number of evaluation steps.
     """

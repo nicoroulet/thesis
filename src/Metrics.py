@@ -48,22 +48,22 @@ class ContinuousMetrics:
         tensor: coefficient value
     """
     # shape notation: b = batch index, d = depth, w = width, h = height
-    # y_true shape: (b, d, w, h, 1)
-    # y_pred shape: (b, d, w, h, n_classes)
+    # y_true shape: (b, w, h, d, 1)
+    # y_pred shape: (b, w, h, d, n_classes)
     n_classes = K.shape(y_pred)[-1]
     # n_classes = K.print_tensor(n_classes, message="n_classes = ")
 
-    # y_true_int shape: (b, d, w, h)
+    # y_true_int shape: (b, w, h, d)
     y_true_int = K.cast(K.squeeze(y_true, axis=-1), 'int32')
 
-    # positive_mask shape: (b, d, w, h, 1)
+    # positive_mask shape: (b, w, h, d, 1)
     positive_mask = K.clip(y_true, 0, 1)
-    # correct_mask shape: (b, d, w, h, n_classes)
+    # correct_mask shape: (b, w, h, d, n_classes)
     correct_mask = K.one_hot(y_true_int, n_classes)
-    # correct_scores shape: (b, d, w, h, n_classes)
+    # correct_scores shape: (b, w, h, d, n_classes)
     correct_scores = correct_mask * y_pred
     # Scores given to the correct labels
-    # correct_scores_sum shape: (b, d, w, h, 1)
+    # correct_scores_sum shape: (b, w, h, d, 1)
     correct_scores_sum = K.sum(correct_scores, axis=-1, keepdims=True)
     # True Positive: sum of correct scores assigned to positive label
     tp = K.sum(positive_mask * correct_scores_sum)
@@ -142,8 +142,7 @@ class ContinuousMetrics:
     """Mean dice loss, same as mean dice coefficient but decreasing."""
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - ContinuousMetrics.mean_dice_coef(ignore_background)(y_true,
-                                                                     y_pred)
+      return 1 - ContinuousMetrics.mean_dice_coef(ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
 
@@ -237,8 +236,7 @@ class DiscreteMetrics:
     """Mean dice loss, same as mean dice coefficient but decreasing."""
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - DiscreteMetrics.mean_dice_coef(n_classes,
-                                         ignore_background)(y_true, y_pred)
+      return 1 - DiscreteMetrics.mean_dice_coef(n_classes, ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
 
@@ -344,8 +342,7 @@ class NumpyMetrics:
     """Mean dice loss, same as mean dice coefficient but decreasing."""
 
     def _mean_dice_loss(y_true, y_pred):
-      return 1 - NumpyMetrics.mean_dice_coef(n_classes,
-                                         ignore_background)(y_true, y_pred)
+      return 1 - NumpyMetrics.mean_dice_coef(n_classes, ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
 
@@ -357,7 +354,8 @@ class FullVolumeValidationCallback(Callback):
   """
 
   def __init__(self, model, val_generator, metrics_savefile,
-               validate_every_n_epochs=20):
+               train_generator=None, validate_every_n_epochs=20,
+               steps=1):
     """Callback initialization.
 
     Args:
@@ -374,10 +372,15 @@ class FullVolumeValidationCallback(Callback):
     with tf.device('/cpu:0'):
       self.validation_model = keras.models.clone_model(model)
     self.labels = list(range(1, model.n_classes))
-    self.generator = val_generator
-    self.data_samples = val_generator.generate_batches(batch_size=1)
+    self.generators = {'val': val_generator}
+    if train_generator is not None:
+      self.generators['train'] = train_generator
+    self.data_samples = {'train': None, 'val': None}
+    self.data_samples = {key: gen.generate_batches(batch_size=1)
+                        for (key, gen) in self.generators.items()}
     self.validate_every_n_epochs = validate_every_n_epochs
-    self.history = []
+    self.steps = steps
+    self.history = {}
     self.metrics_savefile = metrics_savefile
 
   def on_epoch_end(self, epoch, logs={}):
@@ -393,21 +396,26 @@ class FullVolumeValidationCallback(Callback):
       return
     # Copy weights from trained model.
     self.validation_model.set_weights(self.original_model.get_weights())
-    # Evaluate model in full volume.
-    X, Y = next(self.data_samples)
-    xmin, xmax, ymin, ymax, zmin, zmax = self.generator.get_bounding_box(X)
-    X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
-    Y_pred_cropped = self.validation_model.predict(X_cropped)
-    Y = np.squeeze(Y, axis=-1)
-    Y_pred = np.zeros_like(Y)
-    print("shapes:", Y_pred_cropped.shape, Y_pred.shape, Y.shape)
-    Y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = np.argmax(Y_pred_cropped,
-                                                           axis=-1)
-    metrics = MetricsMonitor.MetricsMonitor.getMetricsForWholeSegmentation(Y,
-                                            Y_pred,
-                                            labels=self.labels)
-    print(metrics)
-    self.history.append(metrics)
+    for key in self.generators:
+      metrics = []
+      for i in range(self.steps):
+        # Evaluate model in full volume.
+        X, Y = next(self.data_samples[key])
+        xmin, xmax, ymin, ymax, zmin, zmax = self.generators[key].get_bounding_box(X)
+        X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
+        print("Shape:::::", X_cropped.shape)
+        Y_pred_cropped = self.validation_model.predict(X_cropped)
+        Y = np.squeeze(Y, axis=-1)
+        Y_pred = np.zeros_like(Y)
+        print("shapes:", Y_pred_cropped.shape, Y_pred.shape, Y.shape)
+        Y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = np.argmax(Y_pred_cropped, axis=-1)
+        metric = MetricsMonitor.MetricsMonitor.getMetricsForWholeSegmentation(Y, Y_pred,
+                                                                              labels=self.labels)[0]
+        print(metric)
+        metrics.append(metric)
+      if key not in self.history:
+        self.history[key] = []
+      self.history[key].append(np.mean(metrics, axis=0))
 
   def on_train_end(self, epoch, logs=None):
     """Append new metrics to previous ones.
@@ -417,8 +425,12 @@ class FullVolumeValidationCallback(Callback):
         logs (dict, optional): Dictionary of logs (unused)
     """
     try:
-      previous_metrics = np.load(self.metrics_savefile)
-      metrics = np.append(previous_metrics, self.history)
-    except:
-      metrics = np.stack(self.history)
-    np.save(self.metrics_savefile, metrics)
+      previous_metrics = np.load(self.metrics_savefile + '.npz')
+      metrics = {key: np.append(previous_metrics[key], new_metrics)
+                for (key, new_metrics) in self.history}
+      # metrics = np.append(previous_metrics, self.history, axis=0)
+    except FileNotFoundError:
+      print('Previous metrics not found in %s, recording only new metrics.')
+      metrics = {key: np.stack(history) for (key, history) in self.history.items()}
+    print('Metrics history:\n', metrics)
+    np.savez(self.metrics_savefile, **metrics)
