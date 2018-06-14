@@ -100,40 +100,6 @@ class BatchGenerator:
 
     # self.patch_generator = self.generate_patches()
 
-  def generate_cuboid(self, volume_shape, contained_voxel):
-    """Generate a cuboid to crop a patch.
-
-    The generated cuboid has dimensions `self.patch size`, containing the given
-        voxel, inside the given volume.
-
-    Args:
-        volume_shape (iterable): tuple width, height, depth. Volume that
-            contains the returned cuboid.
-        contained_voxel (iterable): 3D point x, y, z that will be contained in
-            the returned cuboid.
-
-    Returns:
-        tuple: cuboid (x1, x2, y1, y2, z1, z2) that contains `contained_voxel`
-            and is fully contained by `volume_shape`
-    """
-    x1, y1, z1 = v = np.minimum(np.maximum(0, np.array(contained_voxel) -
-                                  np.array(self.patch_shape, dtype='int') // 2),
-                            np.array(volume_shape) - self.patch_shape)
-    x2, y2, z2 = v + self.patch_shape
-    # patch_width, patch_height, patch_depth = self.patch_shape
-    # vx, vy, vz = contained_voxel
-    # x1 = np.random.randint(max(0, vx - patch_width),
-    #                        min(vx + 1, width - patch_width))
-    # y1 = np.random.randint(max(0, vy - patch_height),
-    #                        min(vy + 1, height - patch_height))
-    # z1 = np.random.randint(max(0, vz - patch_depth),
-    #                        min(vz + 1, depth - patch_depth))
-    # x1 = random.randrange(width - patch_width)
-    # x2 = x1 + patch_width
-    # y2 = y1 + patch_height
-    # z2 = z1 + patch_depth
-    return x1, x2, y1, y2, z1, z2
-
   def crop(self, X, Y):
     """Crop a patch from image and segmentation volumes.
 
