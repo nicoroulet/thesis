@@ -75,7 +75,7 @@ def train_unet(dataset, epochs=1, steps_per_epoch=20, batch_size=5,
   if not os.path.exists(savedir):
     os.makedirs(savedir)
   model_checkpoint = ModelCheckpoint(weights_file,
-                                     monitor='loss',
+                                     monitor='val_loss',
                                      save_best_only=True)
   # model_checkpoint = Callback()
 
@@ -240,11 +240,12 @@ def visualize_multiunet():
 # train_unet(mrbrains, epochs=10, steps_per_epoch=10)
 # visualize_unet(mrbrains)
 
-# train_unet(ibsr, epochs=10, steps_per_epoch=1000, batch_size=10)
+train_unet(ibsr, epochs=10, steps_per_epoch=2000, batch_size=10)
 # validate_unet(ibsr, val_steps=10)
 # visualize_unet(ibsr)
 
-train_unet(brats, epochs=1, steps_per_epoch=200, n_channels=4)
+# train_unet(brats, epochs=1, steps_per_epoch=5000, n_channels=4, batch_size=2)
+# validate_unet(brats, val_steps=10, n_channels=4)
 # visualize_unet(brats, n_channels=4)
 
 # train_unet(atlas, epochs=4, steps_per_epoch=10000, patch_shape=(32, 32, 32), batch_size=10)

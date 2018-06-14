@@ -365,6 +365,7 @@ class RawBraTS(NiftiDataset):
     seg = resample_to_1mm(nib.load(seg_path),
                           interpolation='nearest').get_data()
     seg = seg.reshape(seg.shape + (1,)).astype('int8')
+    assert(seg.size)
     return (data, seg)
 
   def _get_data_path(self, path):
@@ -473,6 +474,6 @@ class RawIBSR(NiftiDataset):
 
 if __name__ == '__main__':
   # preprocess_dataset(RawMRBrainS(), '../../data/preprocessed_datasets/mrbrains')
-  preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
-  # preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/brats')
+  # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
+  preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/brats')
   # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/ibsr')

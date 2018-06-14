@@ -23,9 +23,9 @@ class Image:
     while (True):
       label = np.random.choice(labels)
       x1, x2, y1, y2, z1, z2 = sub_volume
-      Y = Y[x1:x2, y1:y2, z1:z2]
+      Y_cropped = Y[x1:x2, y1:y2, z1:z2]
       try:
-        voxel = random.choice(np.argwhere(Y == label))[:-1]
+        voxel = random.choice(np.argwhere(Y_cropped == label))[:-1]
         return voxel + [x1, y1, z1]
       except IndexError:
         pass

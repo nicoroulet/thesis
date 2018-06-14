@@ -100,29 +100,6 @@ class BatchGenerator:
 
     # self.patch_generator = self.generate_patches()
 
-  @staticmethod
-  def get_voxel_of_rand_label(Y, sub_volume):
-    """Random voxel from the given index, with balanced label probabilities.
-
-    Args:
-        Y (Numpy array): Image from which to pick the voxel.
-        sub_volume (tuple): box x1, x2, y1, y2, z1, z2 from which to
-            sample the voxel.
-
-    Returns:
-        Numpy array: coordinates of the chosen voxel.
-    """
-    labels = range(1, int(np.max(Y)) + 1)
-    while (True):
-      label = np.random.choice(labels)
-      x1, x2, y1, y2, z1, z2 = sub_volume
-      Y = Y[x1:x2, y1:y2, z1:z2]
-      try:
-        voxel = random.choice(np.argwhere(Y == label))[:-1]
-        return voxel + [x1, y1, z1]
-      except IndexError:
-        pass
-
   def generate_cuboid(self, volume_shape, contained_voxel):
     """Generate a cuboid to crop a patch.
 
@@ -175,10 +152,9 @@ class BatchGenerator:
     """
     if self.transformations & Transformations.CROP:
       bbox = self.get_bounding_box(X)
-      contained_voxel = self.get_voxel_of_rand_label(Y, bbox)
+      contained_voxel = Tools.Image.get_voxel_of_rand_label(Y, bbox)
       x1, x2, y1, y2, z1, z2 = Tools.Image.generate_cuboid_containing(
                                 self.patch_shape, X.shape[:-1], contained_voxel)
-      # print(bbox, contained_voxel, X[x1:x2, y1:y2, z1:z2, :].shape)
       return (X[x1:x2, y1:y2, z1:z2, :],
               Y[x1:x2, y1:y2, z1:z2, :])
     if self.patch_multiplicity > 1:
@@ -218,8 +194,8 @@ class BatchGenerator:
       return patch
     if np.random.randint(1):
       X, Y = patch
-      X[:] = np.flip(X, axis=3)
-      Y[:] = np.flip(Y, axis=3)
+      X[:] = np.flip(X, axis=0)
+      Y[:] = np.flip(Y, axis=0)
     return patch
 
   def get_bounding_box(self, X):
@@ -282,7 +258,8 @@ class BatchGenerator:
       batch[0][0, ...] = X
       batch[1][0, ...] = Y
 
-      for (X, Y), i in zip(gen, range(1, batch_size)):
+      for i, (X, Y) in zip(range(1, batch_size), gen):
+
         batch[0][i, ...] = X
         batch[1][i, ...] = Y
       yield batch
@@ -308,7 +285,7 @@ if __name__ == '__main__':
   dataset = Datasets.BraTS()
   gen = dataset.get_val_generator(patch_multiplicity=1)
   X, Y = next(gen.generate_batches())
-  print('asdasd', X[0,0,0,0,0])
+  print('First px', X[0,0,0,0,0])
   # X -= X[0, 0, 0, 0, 0]
 
   a,b,c,d,e,f = gen.get_bounding_box(X)
