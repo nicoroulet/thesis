@@ -375,9 +375,6 @@ class FullVolumeValidationCallback(Callback):
     self.generators = {'val': val_generator}
     if train_generator is not None:
       self.generators['train'] = train_generator
-    self.data_samples = {'train': None, 'val': None}
-    self.data_samples = {key: gen.generate_batches(batch_size=1)
-                        for (key, gen) in self.generators.items()}
     self.validate_every_n_epochs = validate_every_n_epochs
     self.steps = steps
     self.history = {}
@@ -400,7 +397,7 @@ class FullVolumeValidationCallback(Callback):
       metrics = []
       for i in range(self.steps):
         # Evaluate model in full volume.
-        X, Y = next(self.data_samples[key])
+        X, Y = next(self.generators[key])
         xmin, xmax, ymin, ymax, zmin, zmax = self.generators[key].get_bounding_box(X)
         X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
         print("Shape:::::", X_cropped.shape)
@@ -427,7 +424,7 @@ class FullVolumeValidationCallback(Callback):
     try:
       previous_metrics = np.load(self.metrics_savefile + '.npz')
       metrics = {key: np.append(previous_metrics[key], new_metrics)
-                for (key, new_metrics) in self.history}
+                for (key, new_metrics) in self.history.items()}
       # metrics = np.append(previous_metrics, self.history, axis=0)
     except FileNotFoundError:
       print('Previous metrics not found in %s, recording only new metrics.')

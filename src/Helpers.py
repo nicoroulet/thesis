@@ -58,6 +58,7 @@ def visualize_predictions(x, y_true, y_pred):
   assert(y_true.shape == y_pred.shape)
 
   plt.hist(y_true.flat)
+  plt.yscale('log')
   plt.show()
   plt.hist(y_pred.flat)
   plt.show()
@@ -77,6 +78,5 @@ def visualize_predictions(x, y_true, y_pred):
     ax.clear()
     ax.imshow(img[i], vmin=vmin, vmax=vmax)
 
-  A = anim.FuncAnimation(fig, update, frames=img.shape[0], repeat=True,
-                         interval=100)
+  A = anim.FuncAnimation(fig, update, frames=img.shape[0], repeat=True, interval=100)
   plt.show()

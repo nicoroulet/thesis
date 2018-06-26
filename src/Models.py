@@ -119,9 +119,8 @@ class UNet(Model):
     Yields:
         tuple: (ground truth, prediction), both categorically encoded.
     """
-    data_samples = generator.generate_batches(batch_size=1)
     for i in range(steps):
-      x, y = next(data_samples)
+      x, y = next(generator)
       xmin, xmax, ymin, ymax, zmin, zmax = generator.get_bounding_box(x)
       x_cropped = x[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
       y_pred_cropped = self.predict(x_cropped)
@@ -157,11 +156,17 @@ class MultiUNet:
                then labels should be ["gray matter", "white matter"]
 
     Example:
-      net = MultiUnet({"tumor": ["non-enhancing tumor",  # label 1 of 1st net
-                                 "enhancing tumor"],     # label 2 of 1st net
-                       "anatomical": ["CSF",             # label 1 of 2nd net
-                                      "White matter",    # label 2 of 2nd net
-                                      "Gray matter"]})   # label 3 of 2nd net
+      tumor_tasks = [
+         {"name": "tumor",
+          "labels": ["necrosis",
+                     "edema",
+                     "nonenhancing tumor",
+                     "enhancing tumor"]},
+         {"name": "anatomical",
+          "labels": ["CSF",
+                     "White matter",
+                     "Gray matter"]}
+        ]
     """
     self.task_names = [task['name'] for task in tasks]
     self.nets = {}
@@ -174,12 +179,12 @@ class MultiUNet:
       self.labels.append(task["labels"])
       self.nets[name] = UNet.UNet(n_classes)
       self.nets[name].compile(
-                    loss=Metrics.continuous.dice_loss,
-                    # loss='sparse_categorical_crossentropy',
-                    optimizer='adam',
-                    metrics=['accuracy',
-                             Metrics.continuous.dice_coef,
-                             Metrics.continuous.mean_dice_coef()])
+                              loss=Metrics.continuous.dice_loss,
+                              # loss='sparse_categorical_crossentropy',
+                              optimizer='adam',
+                              metrics=['accuracy',
+                                       Metrics.continuous.dice_coef,
+                                       Metrics.continuous.mean_dice_coef()])
 
       savedir = "weights"
       if not os.path.exists(savedir):
@@ -234,6 +239,9 @@ class MultiUNet:
         metrics (list): list of metrics to evaluate on. Each metric is a
             function that takes y_true, y_pred and returns a value
         steps (5, optional): number of evaluation steps.
+
+    Returns:
+        numpy array: averaged metrics for all evaluated images.
     """
     metric_values = []
     for i, (x, y_true) in zip(range(steps), generator):

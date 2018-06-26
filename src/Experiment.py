@@ -9,7 +9,6 @@ import Models
 import glob
 import os
 
-import keras
 from keras.callbacks import ModelCheckpoint, TensorBoard, LearningRateScheduler
 from keras.metrics import sparse_categorical_accuracy
 
@@ -17,8 +16,9 @@ atlas = Datasets.ATLAS()
 brats = Datasets.BraTS()
 mrbrains = Datasets.MRBrainS()
 ibsr = Datasets.IBSR()
+wmh = Datasets.WMH()
 
-tasks = [
+tumor_tasks = [
          {"name": "tumor",
           "labels": ["necrosis",
                      "edema",
@@ -30,9 +30,19 @@ tasks = [
                      "Gray matter"]}
         ]
 
+wmh_tasks = [
+         {"name": "wmh",
+          "labels": ["wmh",
+                     "other"]},
+         {"name": "anatomical",
+          "labels": ["CSF",
+                     "White matter",
+                     "Gray matter"]}
+        ]
+
 
 def train_unet(dataset, epochs=1, steps_per_epoch=20, batch_size=5,
-               patch_shape=(32, 32, 32), net_depth=4, n_channels=1):
+               patch_shape=(32, 32, 32), net_depth=4):
   """Build UNet, load the weights (if any), train, save weights."""
   savedir = 'checkpoints/unet_%s_%d' % (dataset.name, net_depth)
   weights_file = '%s/weights.h5' % savedir
@@ -48,13 +58,13 @@ def train_unet(dataset, epochs=1, steps_per_epoch=20, batch_size=5,
   epochs += initial_epoch
 
   n_classes = dataset.n_classes
+  n_channels = dataset.n_modalities
 
   model = Models.UNet(n_classes, depth=net_depth, n_channels=n_channels)
 
   print('patch_multiplicity', model.patch_multiplicity)
-  patch_tr_gen, patch_val_gen = dataset.get_patch_generators(patch_shape)
-  full_tr_gen, full_val_gen = dataset.get_full_volume_generators(
-                                                      model.patch_multiplicity)
+  patch_tr_gen, patch_val_gen = dataset.get_patch_generators(patch_shape, batch_size=batch_size)
+  full_tr_gen, full_val_gen = dataset.get_full_volume_generators(model.patch_multiplicity)
 
   model.compile(
                 loss='sparse_categorical_crossentropy',
@@ -87,30 +97,29 @@ def train_unet(dataset, epochs=1, steps_per_epoch=20, batch_size=5,
                             write_images=True)
 
   def sched(epoch, lr):
-    return lr * .95
+    return lr * .98
   lr_sched = LearningRateScheduler(sched, verbose=1)
 
   full_volume_validation = Metrics.FullVolumeValidationCallback(model,
-      full_val_gen, metrics_savefile=metrics_file, validate_every_n_epochs=1)
+      full_val_gen, metrics_savefile=metrics_file, validate_every_n_epochs=10)
 
-  model.fit_generator(patch_tr_gen.generate_batches(batch_size=batch_size),
-                   steps_per_epoch=steps_per_epoch,
-                   initial_epoch=initial_epoch,
-                   epochs=epochs,
-                   validation_data=patch_val_gen.generate_batches(
-                                                        batch_size=batch_size),
-                   validation_steps=10,
-                   callbacks=[model_checkpoint,
-                              tensorboard,
-                              lr_sched,
-                              full_volume_validation
-                              ])
+  model.fit_generator(patch_tr_gen,
+                      steps_per_epoch=steps_per_epoch,
+                      initial_epoch=initial_epoch,
+                      epochs=epochs,
+                      validation_data=patch_val_gen,
+                      validation_steps=10,
+                      callbacks=[model_checkpoint,
+                                 tensorboard,
+                                 lr_sched,
+                                 full_volume_validation
+                                 ])
 
   open(epoch_file, 'w').write(str(epochs))
   print("Done")
 
 
-def validate_unet(dataset, net_depth=4, n_channels=1, val_steps=5):
+def validate_unet(dataset, net_depth=4, val_steps=5):
   """Run full volume CPU validation on both training and validation."""
   import numpy as np
   import tensorflow as tf
@@ -121,13 +130,9 @@ def validate_unet(dataset, net_depth=4, n_channels=1, val_steps=5):
   MetricsMonitor = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(MetricsMonitor)
 
-  # tr_gen = tr_gen.generate_batches(batch_size=1)
-  # val_gen = val_gen.generate_batches(batch_size=1)
-
-  n_classes = dataset.n_classes
 
   with tf.device('/cpu:0'):
-    model = Models.UNet(n_classes, depth=net_depth, n_channels=n_channels)
+    model = Models.UNet(dataset.n_classes, depth=net_depth, n_channels=datasetn_channels)
 
   model.compile(loss='sparse_categorical_crossentropy',
                 optimizer='sgd')
@@ -153,19 +158,16 @@ def validate_unet(dataset, net_depth=4, n_channels=1, val_steps=5):
   print('Val:\n', metrics[1])
 
 
-def visualize_unet(dataset, net_depth=4, n_channels=1):
+def visualize_unet(dataset, net_depth=4):
   """Compute one MultiUNet prediction and visualize against ground truth."""
   import numpy as np
   generator = dataset.get_val_generator((128, 128, 128),
-                                        transformations=BatchGenerator.Transformations.CROP)
-  generator = generator.generate_batches(batch_size=1)
+                                        transformations=BatchGenerator.Transformations.CROP,
+                                        batch_size=1)
 
-  n_classes = dataset.n_classes
+  model = Models.UNet(dataset.n_classes, depth=net_depth, n_channels=dataset.n_channels)
 
-  model = Models.UNet(n_classes, depth=net_depth, n_channels=n_channels)
-
-  model.compile(loss='sparse_categorical_crossentropy',
-                optimizer='sgd')
+  model.compile(loss='sparse_categorical_crossentropy', optimizer='sgd')
 
   savedir = 'checkpoints/unet_%s_%d' % (dataset.name, net_depth)
   weights_file = '%s/weights.h5' % savedir
@@ -190,26 +192,67 @@ def train_multiunet(epochs=1, steps_per_epoch=20, batch_size=3,
       steps_per_epoch (int, optional): number of batches per epoch
       batch_size (int, optional): size of training batches
   """
-  tumor_gen = brats.get_train_generator(patch_shape)
+  tumor_gen = brats.get_train_generator(patch_shape, batch_size=batch_size)
 
-  # anatomical_gen = mrbrains.get_train_generator(patch_shape)
+  # anatomical_gen = mrbrains.get_train_generator(patch_shape, batch_size=batch_size)
 
   model = Models.MultiUNet(tasks)
 
   model.fit_generator("tumor",
-                      tumor_gen.generate_batches(batch_size=batch_size),
+                      tumor_gen,
                       steps_per_epoch=steps_per_epoch,
                       epochs=epochs)
   # model.fit_generator("anatomical",
-  #                     anatomical_gen.generate_batches(batch_size=batch_size),
+  #                     anatomical_gen,
   #                     steps_per_epoch=steps_per_epoch,
   #                     epochs=epochs)
+
+
+def validate_multiunet(dataset, net_depth=4, val_steps=5):
+  """Run MultiUNet full volume CPU validation on both training and validation."""
+  import numpy as np
+  import tensorflow as tf
+
+  import importlib.util
+  spec = importlib.util.spec_from_file_location("MetricsMonitor",
+                        "../../blast/blast/cnn/MetricsMonitor.py")
+  MetricsMonitor = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(MetricsMonitor)
+
+  n_classes = dataset.n_classes
+
+  with tf.device('/cpu:0'):
+    model = Models.MultiUNet(n_classes, depth=net_depth, n_channels=n_channels)
+
+  model.compile(loss='sparse_categorical_crossentropy',
+                optimizer='sgd')
+
+  tr_gen, val_gen = dataset.get_full_volume_generators(patch_multiplicity=model.patch_multiplicity)
+
+  savedir = 'checkpoints/unet_%s_%d' % (dataset.name, net_depth)
+  weights_file = '%s/weights.h5' % savedir
+  # if os.path.exists(weights_file):
+  print('Loading weights...')
+  model.load_weights(weights_file)
+
+  metrics = []
+  for generator in (tr_gen, val_gen):
+    gen_metrics = []
+    for y_true, y_pred in model.predict_generator(generator, steps=val_steps):
+      gen_metrics.append(MetricsMonitor.MetricsMonitor.getMetricsForWholeSegmentation(y_true,
+                                                            y_pred,
+                                                            labels=range(1, model.n_classes))[0])
+    print(gen_metrics)
+    metrics.append(np.mean(gen_metrics, axis=0))
+  print('Train:\n', metrics[0])
+  print('Val:\n', metrics[1])
+
 
 
 def test_multiunet():
   """Build a MultiUNet, load weights and evaluate on generator."""
   # Using the train generator to fit into memory
-  anatomical_gen = mrbrains.get_train_generator((64, 64, 64)).generate_batches()
+  anatomical_gen = mrbrains.get_train_generator((64, 64, 64))
 
   model = Models.MultiUNet(tasks)
 
@@ -221,8 +264,7 @@ def test_multiunet():
 def visualize_multiunet():
   """Compute one MultiUNet prediction and visualize against ground truth."""
   import numpy as np
-  generator = brats.get_train_generator((128, 128, 128))
-  generator = generator.generate_batches(batch_size=1)
+  generator = brats.get_train_generator((128, 128, 128), batch_size=1)
 
   model = Models.MultiUNet(tasks)
 
@@ -240,7 +282,7 @@ def visualize_multiunet():
 # train_unet(mrbrains, epochs=10, steps_per_epoch=10)
 # visualize_unet(mrbrains)
 
-train_unet(ibsr, epochs=10, steps_per_epoch=2000, batch_size=10)
+# train_unet(ibsr, epochs=1, steps_per_epoch=20, batch_size=10)
 # validate_unet(ibsr, val_steps=10)
 # visualize_unet(ibsr)
 
@@ -251,6 +293,11 @@ train_unet(ibsr, epochs=10, steps_per_epoch=2000, batch_size=10)
 # train_unet(atlas, epochs=4, steps_per_epoch=10000, patch_shape=(32, 32, 32), batch_size=10)
 # validate_unet(atlas, val_steps=10)
 # visualize_unet(atlas)
+
+# train_unet(wmh, epochs=10, steps_per_epoch=200, patch_shape=(32, 32, 32), batch_size=7,
+#            n_channels=2)
+# validate_unet(wmh, val_steps=10, n_channels=2)
+visualize_unet(wmh, n_channels=2)
 
 # train_multiunet(epochs=200, steps_per_epoch=50)
 # test_multiunet()
