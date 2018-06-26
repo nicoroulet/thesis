@@ -71,7 +71,8 @@ class BatchGenerator:
   def __init__(self, patch_shape, paths, loader_function, max_queue_size=10,
                pool_size=5, pool_refresh_period=20,
                transformations=Transformations.ALL,
-               patch_multiplicity=1):
+               patch_multiplicity=1,
+               batch_size=5):
     """Initialize the thread that fetches objects in the queue.
 
     Args:
@@ -97,8 +98,8 @@ class BatchGenerator:
     self.cycle = itertools.cycle(range(pool_size))
     self.transformations = transformations
     self.patch_multiplicity = patch_multiplicity
-
-    # self.patch_generator = self.generate_patches()
+    self.patch_generator = self.generate_patches()
+    self.batch_size = batch_size
 
   def crop(self, X, Y):
     """Crop a patch from image and segmentation volumes.
@@ -195,40 +196,39 @@ class BatchGenerator:
       new_size = size + (self.patch_multiplicity -
                          size % self.patch_multiplicity)
       diff = new_size - size
-      # Expand the box to enforce multiplicity, without exceeding the
-      # [0, max_size) interval.
+      # Expand the box to enforce multiplicity, without exceeding the [0, max_size) interval.
       new_vmin = max(0, min(vmin - diff // 2, max_size - new_size))
       new_vmax = min(max_size, new_vmin + new_size)
       out.extend([new_vmin, new_vmax])
     return tuple(out)
 
-  def generate_batches(self, batch_size=5):
+  def __next__(self):
     """Generate a batch of given size.
 
     Batches are filled with the generator given by `generate_patches`
-    Args:
-        batch_size (int, optional): Size of patches.
 
     Yields:
-        Generator: Batch generator
+        tuple: (x, y), data and segmentation batches.
     """
-    gen = self.generate_patches()
     if self.patch_shape is None:
-      for X, Y in gen:
-        yield (X.reshape(1, *X.shape),
-               Y.reshape(1, *Y.shape))
-    while True:
-      X, Y = next(gen)
-      batch = (np.empty((batch_size, *X.shape)),
-               np.empty((batch_size, *Y.shape)))
+      X, Y = next(self.patch_generator)
+      return (X.reshape(1, *X.shape),
+             Y.reshape(1, *Y.shape))
+    else:
+      X, Y = next(self.patch_generator)
+      batch = (np.empty((self.batch_size, *X.shape)),
+               np.empty((self.batch_size, *Y.shape)))
       batch[0][0, ...] = X
       batch[1][0, ...] = Y
 
-      for i, (X, Y) in zip(range(1, batch_size), gen):
+      for i, (X, Y) in zip(range(1, self.batch_size), self.patch_generator):
 
         batch[0][i, ...] = X
         batch[1][i, ...] = Y
-      yield batch
+      return batch
+
+  def __iter__(self):
+    return self
 
   def generate_patches(self):
     while (True):
@@ -246,22 +246,55 @@ class BatchGenerator:
         self.queue.task_done()
 
 
-if __name__ == '__main__':
-  import Datasets
-  dataset = Datasets.BraTS()
-  gen = dataset.get_val_generator(patch_multiplicity=1)
-  X, Y = next(gen.generate_batches())
-  print('First px', X[0,0,0,0,0])
-  # X -= X[0, 0, 0, 0, 0]
+class ModalityFilter:
+  """Batch Generator wrapper thar drops modalities.
 
-  a,b,c,d,e,f = gen.get_bounding_box(X)
-  print(a,b,c,d,e,f)
-  # X = np.log(np.log(X + np.min(X) + 1) + 2)
-  # X = (0 < X) & (X < .2)
+  This enables to feed nets that are trained on a subset of the modalities.
+  """
 
-  Xc = X[0,a:b,c:d,e:f,:]
-  Yc = Y[0,a:b,c:d,e:f,:]
-  # Xc = X[0,...]
-  # Yc = Y[0,...]
-  # Yc = Xc != 0
-  np.save('cropped', [Xc, Yc])
+  def __init__(self, batch_generator, kept_modalities):
+    """Build ModalityFilter.
+
+    Args:
+        batch_generator (BatchGenerator): generator to filter
+        kept_modalities (list): indexes of modalities that will be kept
+    """
+    self.batch_generator = batch_generator
+    self.kept_modalities = kept_modalities
+
+  def __next__(self):
+    """Get a batch from the generator and filter unwanted modalities.
+
+    Returns:
+        tuple: (x, y), filtered batch.
+    """
+    x, y = next(self.batch_generator)
+    x_filtered = x[..., self.kept_modalities]
+    return x_filtered, y
+
+  def __iter__(self):
+    return self
+
+  def __getattr__(self, name):
+    return self.batch_generator.__dict__[name]
+
+
+# if __name__ == '__main__':
+#   import Datasets
+#   dataset = Datasets.BraTS()
+#   gen = dataset.get_val_generator(patch_multiplicity=1)
+#   X, Y = next(gen)
+#   print('First px', X[0,0,0,0,0])
+#   # X -= X[0, 0, 0, 0, 0]
+
+#   a,b,c,d,e,f = gen.get_bounding_box(X)
+#   print(a,b,c,d,e,f)
+#   # X = np.log(np.log(X + np.min(X) + 1) + 2)
+#   # X = (0 < X) & (X < .2)
+
+#   Xc = X[0,a:b,c:d,e:f,:]
+#   Yc = Y[0,a:b,c:d,e:f,:]
+#   # Xc = X[0,...]
+#   # Yc = Y[0,...]
+#   # Yc = Xc != 0
+#   np.save('cropped', [Xc, Yc])
