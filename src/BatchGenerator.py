@@ -40,7 +40,7 @@ class FetcherThread(threading.Thread):
   TODO: make this part more robust to non-normalized images.
   """
 
-  def __init__(self, loader_function, paths, queue):
+  def __init__(self, loader_function, paths, queue, infinite=True):
     """ Initialize the Thread that fetches images.
 
     Args:
@@ -51,14 +51,20 @@ class FetcherThread(threading.Thread):
     """
     super(FetcherThread, self).__init__()
     self.loader_function = loader_function
-    self.paths = paths
+    if infinite:
+      self.paths = itertools.cycle(paths)
+    else:
+      self.paths = iter(paths)
     self.queue = queue
     self.daemon = True
 
   def run(self):
     """Thread execution routine."""
     while (True):
-      self.queue.put(self.loader_function(np.random.choice(self.paths)))
+      try:
+        self.queue.put(self.loader_function(next(self.paths)))
+      except StopIteration:
+        break
 
 
 class BatchGenerator:
@@ -72,7 +78,8 @@ class BatchGenerator:
                pool_size=5, pool_refresh_period=20,
                transformations=Transformations.ALL,
                patch_multiplicity=1,
-               batch_size=5):
+               batch_size=5,
+               infinite=True):
     """Initialize the thread that fetches objects in the queue.
 
     Args:
@@ -88,7 +95,7 @@ class BatchGenerator:
     """
     self.patch_shape = patch_shape
     self.queue = queue.Queue(maxsize=max_queue_size)
-    self.thread = FetcherThread(loader_function, paths, self.queue)
+    self.thread = FetcherThread(loader_function, paths, self.queue, infinite=infinite)
     self.thread.start()
     self.pool = []
     self.pool_size = pool_size
@@ -100,8 +107,9 @@ class BatchGenerator:
     self.patch_multiplicity = patch_multiplicity
     self.patch_generator = self.generate_patches()
     self.batch_size = batch_size
+    self.bboxes = [self.get_bounding_box(self.pool[0][0])]
 
-  def crop(self, X, Y):
+  def crop(self, X, Y, bbox):
     """Crop a patch from image and segmentation volumes.
 
     If cropping is enabled in `self.transformations`, then a voxel of a random
@@ -118,9 +126,8 @@ class BatchGenerator:
         TYPE: Description
     """
     if self.transformations & Transformations.CROP:
-      bbox = self.get_bounding_box(X)
-      contained_voxel = Tools.Image.get_voxel_of_rand_label(Y, bbox)
-      x1, x2, y1, y2, z1, z2 = Tools.Image.generate_cuboid_containing(
+      contained_voxel = Tools.get_voxel_of_rand_label(Y, bbox)
+      x1, x2, y1, y2, z1, z2 = Tools.generate_cuboid_containing(
                                 self.patch_shape, X.shape[:-1], contained_voxel)
       return (X[x1:x2, y1:y2, z1:z2, :],
               Y[x1:x2, y1:y2, z1:z2, :])
@@ -131,6 +138,7 @@ class BatchGenerator:
       xyz2 = xyz1 + whd_cropped
       x1, y1, z1 = xyz1
       x2, y2, z2 = xyz2
+      print(x1, x2, y1, y2, z1, z2)
       return (X[x1:x2, y1:y2, z1:z2, :],
               Y[x1:x2, y1:y2, z1:z2, :])
     return X, Y
@@ -231,19 +239,28 @@ class BatchGenerator:
     return self
 
   def generate_patches(self):
+    idx = next(self.cycle)
     while (True):
-      for i in range(self.pool_refresh_period):
-        X, Y = random.choice(self.pool)
+      for _ in range(self.pool_refresh_period):
+        i = np.random.randint(len(self.pool))
+        X, Y = self.pool[i]
         yield self.maybe_flip(
                 self.add_gaussian_noise(
-                    self.crop(X, Y)))
+                    self.crop(X, Y, self.bboxes[i])))
       # Replace one element from the pool
-      idx = next(self.cycle)
-      self.pool[idx] = self.queue.get()
-      self.queue.task_done()
-      if len(self.pool) < self.pool_size:
-        self.pool.append(self.queue.get())
+      try:
+        if len(self.pool) < self.pool_size:
+          self.pool.append(self.queue.get(timeout=5))
+          self.bboxes.append(self.get_bounding_box(self.pool[-1][0]))
+        else:
+          self.pool[idx] = self.queue.get(timeout=5)
+          self.bboxes[idx] = self.get_bounding_box(self.pool[idx][0])
+          idx = next(self.cycle)
         self.queue.task_done()
+      except queue.Empty:  # On timeout, the queue is assumed to be depleted.
+        # TODO: gradually deplete pool. For now, this is only used in full volume with pool_size = 1
+        # so this is fine.
+        return
 
 
 class ModalityFilter:
@@ -252,15 +269,17 @@ class ModalityFilter:
   This enables to feed nets that are trained on a subset of the modalities.
   """
 
-  def __init__(self, batch_generator, kept_modalities):
+  def __init__(self, batch_generator, all_modalities, kept_modalities):
     """Build ModalityFilter.
 
     Args:
-        batch_generator (BatchGenerator): generator to filter
-        kept_modalities (list): indexes of modalities that will be kept
+        batch_generator (BatchGenerator): generator to filter.
+        all_modalities (list): list of modalities yielded by `batch_generator`.
+        kept_modalities (list): list of modalities that will be kept.
     """
     self.batch_generator = batch_generator
-    self.kept_modalities = kept_modalities
+    self.kept_modalities = [i for (i, modality) in enumerate(all_modalities)
+                            if modality in kept_modalities]
 
   def __next__(self):
     """Get a batch from the generator and filter unwanted modalities.
@@ -273,10 +292,11 @@ class ModalityFilter:
     return x_filtered, y
 
   def __iter__(self):
+    """Return an iterable."""
     return self
 
   def __getattr__(self, name):
-    return self.batch_generator.__dict__[name]
+    return getattr(self.batch_generator, name)
 
 
 # if __name__ == '__main__':

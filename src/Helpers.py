@@ -57,10 +57,14 @@ def visualize_predictions(x, y_true, y_pred):
   print(y_true.shape, y_pred.shape)
   assert(y_true.shape == y_pred.shape)
 
-  plt.hist(y_true.flat)
-  plt.yscale('log')
-  plt.show()
-  plt.hist(y_pred.flat)
+  ax = plt.subplot(121)
+  ax.hist(y_true.flat)
+  ax.set_yscale('log')
+  ax.set_title('Ground truth hist')
+  ax = plt.subplot(122)
+  ax.hist(y_pred.flat)
+  ax.set_yscale('log')
+  ax.set_title('Ground truth hist')
   plt.show()
 
   x /= np.max(x)

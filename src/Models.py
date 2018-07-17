@@ -1,21 +1,39 @@
-""" This file contains the different segmentation models. """
+"""This file contains the different segmentation models."""
 
 import os
 
 import Metrics
+import Tools
 
 import numpy as np
+import fractions
+import functools
 
 # import tensorflow as tf
 
 from keras.layers import Input, Conv3D, Conv3DTranspose, MaxPooling3D, \
-                         concatenate, Add, Dropout, BatchNormalization
+                         Add, Dropout, BatchNormalization
 from keras.models import Model
 from keras.callbacks import ModelCheckpoint
 
 
+def lcm(l):
+  """Least common multiplier of elements in a list.
+
+  Args:
+      l (list): The list
+
+  Returns:
+      int: the lcm of the list
+
+  """
+  def _lcm(a, b):
+    return a * b / fractions.gcd(a, b)
+  return functools.reduce(_lcm, l)
+
+
 def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
-  """ Build a UNet neural network and returns the input and output layers.
+  """Build a UNet neural network and returns the input and output layers.
 
   Args:
       n_classes (int): number of output classes (segmentation labels).
@@ -27,6 +45,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
           each upconvolution.
   Return:
     inputs, outputs: input and output layers.
+
   """
   conv_params = {
       'kernel_size': (3, 3, 3),
@@ -98,6 +117,7 @@ class UNet(Model):
         base_filters (int, optional): number of filters on the initial layers.
             The number of filters is doubled on each maxpooling and halved on
             each upconvolution.
+
     """
     inputs, outputs = build_unet(n_classes,
                                  depth=depth,
@@ -118,9 +138,9 @@ class UNet(Model):
 
     Yields:
         tuple: (ground truth, prediction), both categorically encoded.
+
     """
-    for i in range(steps):
-      x, y = next(generator)
+    for (i, (x, y)) in zip(range(steps), generator):
       xmin, xmax, ymin, ymax, zmin, zmax = generator.get_bounding_box(x)
       x_cropped = x[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
       y_pred_cropped = self.predict(x_cropped)
@@ -142,11 +162,13 @@ class MultiUNet:
       nets (dict): maps task names to the corresponding network.
       savefiles (dict): maps task names to the savefiles used to store weights.
       task_names (list): task names, in priority order.
+
   """
 
-  def __init__(self, tasks, net_depth=4):
-    """ Build a model with one UNet per task.
+  def __init__(self, datasets, depth=4, loss=None):
+    """Build a model with one UNet per task.
 
+    TODO: rewrite docstring.
     Args:
         tasks: list of dicts storing: {name, labels}
                Tasks should be given in order of priority. Class 0 of all tasks
@@ -168,43 +190,77 @@ class MultiUNet:
                      "Gray matter"]}
         ]
     """
-    self.task_names = [task['name'] for task in tasks]
+    # TODO: manage passing different losses to each dataset.
+    self.datasets = datasets
     self.nets = {}
     self.savefiles = {}
     self.callbacks = {}
-    self.labels = ["background"]
-    for task in tasks:
-      name = task["name"]
-      n_classes = len(task["labels"]) + 1
-      self.labels.append(task["labels"])
-      self.nets[name] = UNet.UNet(n_classes)
+    for dataset in datasets:
+      name = dataset.name
+      self.nets[name] = UNet(dataset.n_classes, depth=depth, n_channels=dataset.n_modalities)
       self.nets[name].compile(
-                              loss=Metrics.continuous.dice_loss,
-                              # loss='sparse_categorical_crossentropy',
+                              # loss=Metrics.continuous.dice_loss,
+                              loss='sparse_categorical_crossentropy',
                               optimizer='adam',
                               metrics=['accuracy',
-                                       Metrics.continuous.dice_coef,
-                                       Metrics.continuous.mean_dice_coef()])
+                                       Metrics.ContinuousMetrics.dice_coef,
+                                       Metrics.ContinuousMetrics.mean_dice_coef()])
 
-      savedir = "weights"
+      savedir = Tools.get_dataset_savedir(dataset, loss)
+      # savedir = 'checkpoints/unet_%s_%d' % (name, depth)
       if not os.path.exists(savedir):
         os.mkdir(savedir)
-      savefile = savedir + "/multiunet_%s.h5" % name.lower().replace(' ', '_')
+      savefile = savedir + "/weights.h5"
       self.savefiles[name] = savefile
       if os.path.exists(savefile):
+        print('loading weights from', savefile)
         self.nets[name].load_weights(savefile)
+      else:
+        print('WARNING: weights file not found.')
+      # TODO: add epoch count, metrics, tensorboard.
 
       model_checkpoint = ModelCheckpoint(savefile,
-                                         monitor='loss',
-                                         save_best_only=False)
+                                         monitor='val_loss',
+                                         save_best_only=True)
 
       self.callbacks[name] = [model_checkpoint]
 
+    # self.task_names = [task['name'] for task in tasks]
+    # self.nets = {}
+    # self.savefiles = {}
+    # self.callbacks = {}
+    # self.labels = ["background"]
+    # for task in tasks:
+    #   name = task["name"]
+    #   n_classes = len(task["labels"]) + 1
+    #   self.labels.append(task["labels"])
+    #   self.nets[name] = UNet.UNet(n_classes)
+    #   self.nets[name].compile(
+    #                           loss=Metrics.continuous.dice_loss,
+    #                           # loss='sparse_categorical_crossentropy',
+    #                           optimizer='adam',
+    #                           metrics=['accuracy',
+    #                                    Metrics.continuous.dice_coef,
+    #                                    Metrics.continuous.mean_dice_coef()])
+
+    #   savedir = "weights"
+    #   if not os.path.exists(savedir):
+    #     os.mkdir(savedir)
+    #   savefile = savedir + "/multiunet_%s.h5" % name.lower().replace(' ', '_')
+    #   self.savefiles[name] = savefile
+    #   if os.path.exists(savefile):
+    #     self.nets[name].load_weights(savefile)
+
+    #   model_checkpoint = ModelCheckpoint(savefile,
+    #                                      monitor='loss',
+    #                                      save_best_only=False)
+
+    #   self.callbacks[name] = [model_checkpoint]
+
   def fit_generator(self, task_name, *args, **kwargs):
-    """ Call the fit_generator corresponding to task_name. """
+    """Call the fit_generator corresponding to task_name."""
     print("Fitting task: %s..." % task_name)
-    kwargs['callbacks'] = (kwargs.get('callbacks', []) +
-                           self.callbacks[task_name])
+    kwargs['callbacks'] = (kwargs.get('callbacks', []) + self.callbacks[task_name])
     return self.nets[task_name].fit_generator(*args, **kwargs)
 
   def merge_segmentations(self, y_per_task):
@@ -217,19 +273,19 @@ class MultiUNet:
 
     Returns:
         Numpy array: resulting segmentation.
-    """
 
+    """
     # TODO: manage overlapping label definitions (Ys should be disjoint except
     # for background)
     merge = np.zeros_like(next(iter(y_per_task.values())))
     label_offset = 0
-    for task_name in self.task_names:
-      Y = y_per_task[task_name]
-      merge += (Y + (Y != 0) * label_offset) * (merge == 0)
-      label_offset += self.nets[task_name].n_classes
+    for dataset in self.datasets:
+      Y = y_per_task[dataset.name]
+      merge += (Y + (Y != 0) * (label_offset)) * (merge == 0)
+      label_offset += self.nets[dataset.name].n_classes - 1
     return merge
 
-  def evaluate_generator(self, generator, metrics, steps=5):
+  def evaluate_generator(self, generator, metrics, steps=5, modalities=None):
     """Evaluate the model on the given generator.
 
     Args:
@@ -242,22 +298,63 @@ class MultiUNet:
 
     Returns:
         numpy array: averaged metrics for all evaluated images.
+
     """
     metric_values = []
-    for i, (x, y_true) in zip(range(steps), generator):
-      y_true = y_true.reshape(y_true.shape[:-1])
-      y_pred = self.predict(x)
+    for y_true, y_pred in self.predict_generator(generator, steps, modalities):
       metric_values.append([metric(y_true, y_pred) for metric in metrics])
     return np.mean(metric_values, axis=0)
 
-  def predict(self, x):
-    """ Return a prediction for the given input.
+  def predict(self, x, modalities=None):
+    """Return a prediction for the given input.
 
     Args:
-        X (Numpy array): input 3d image.
+        x (Numpy array): input image.
+        modalities (list, optional): modalities encoded in the las dimension of x. If `None`,
+            then modalities from x are assumed to match modalities on the training datasets.
+
+    Returns:
+        numpy array: predictions, categorically encoded.
+
     """
     predictions = {}
-    for task_name in self.task_names:
-      predictions[task_name] = np.argmax(self.nets[task_name].predict(x),
-                                         axis=-1)
+    for dataset in self.datasets:
+      if modalities is not None:
+        x_filtered = Tools.filter_modalities(modalities, dataset.modalities, x)
+      else:
+        x_filtered = x
+      print('predicting x.shape = ', x_filtered.shape)
+      predictions[dataset.name] = np.argmax(self.nets[dataset.name].predict(x_filtered), axis=-1)
     return self.merge_segmentations(predictions)
+
+  def predict_generator(self, generator, steps=5, modalities=None):
+    """Generate predictions from a given generator.
+
+    Args:
+        generator (BatchGenerator): image generator
+        steps (int, optional): number of images to predict.
+        modalities (list, optional): list of modalities for on the given generator.
+
+    Yields:
+        tuple: (y_true, y_pred), ground truth and predicted labels.
+
+    """
+    for i, (x, y_true) in zip(range(steps), generator):
+
+      xmin, xmax, ymin, ymax, zmin, zmax = generator.get_bounding_box(x)
+      x_cropped = x[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
+      y_pred_cropped = self.predict(x_cropped, modalities)
+      y_true = np.squeeze(y_true, axis=-1)
+      y_pred = np.zeros_like(y_true)
+      y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = y_pred_cropped
+      yield y_true, y_pred
+
+  @property
+  def patch_multiplicity(self):
+    """Joint patch multiplicity for all nets."""
+    return int(lcm([net.patch_multiplicity for net in self.nets.values()]))
+
+  @property
+  def n_classes(self):
+    """Number of classes of multiunet, which is the union of the classes from the different nets."""
+    return sum(dataset.n_classes - 1 for dataset in self.datasets) + 1

@@ -6,12 +6,13 @@
 - ATLAS (stroke lesion).
 """
 from glob import glob
+import itertools
 import nibabel as nib
 import numpy as np
-import pickle
 from nilearn.image import resample_img
 
 from BatchGenerator import BatchGenerator, Transformations
+import Tools
 
 
 def normalize(X):
@@ -22,6 +23,7 @@ def normalize(X):
 
   Returns:
       Numpy array: normalized image
+
   """
   # X -= np.mean(X)
   X /= np.std(X)
@@ -33,11 +35,11 @@ def resample_to_1mm(img, interpolation='continuous'):
 
   Args:
       img (Nifty Image): Input image
-      interpolation (string): resampling method. 'continuous', 'nearest' or
-          'linear'
+      interpolation (string): resampling method. `continuous`, `nearest` or `linear`.
 
   Returns:
-      Nifty Image: Resampled image
+      Nifty Image: Resampled image.
+
   """
   return resample_img(img, target_affine=np.eye(3), interpolation=interpolation)
 
@@ -49,6 +51,7 @@ def preprocess_dataset(dataset, root_dir):
       dataset: input dataste
       root_dir (string): directory to store dataset
   """
+  root_dir += dataset.name + '/'
   import os
 
   if not os.path.exists(root_dir):
@@ -75,12 +78,13 @@ def preprocess_dataset(dataset, root_dir):
 
 
 class Dataset:
-  """ Abstract Dataset class.
+  """Abstract Dataset class.
 
   Requires the subclass to implement the load_path and _get_paths methods.
   """
 
   def __init__(self, root_path, validation_portion=.2):
+    self.root_path = root_path
     paths = self._get_paths(root_path)
     val_n = int(len(paths) * validation_portion)
     if val_n == 0:
@@ -121,12 +125,13 @@ class Dataset:
 
   def get_val_generator(self,
                         patch_shape=None,
-                        max_queue_size=2,
+                        max_queue_size=4,
                         pool_size=1,
                         pool_refresh_period=1,
                         transformations=Transformations.NONE,
                         patch_multiplicity=1,
-                        batch_size=1):
+                        batch_size=1,
+                        infinite=True):
     return BatchGenerator(patch_shape,
                           self.val_paths,
                           self.load_path,
@@ -135,7 +140,8 @@ class Dataset:
                           pool_refresh_period=pool_refresh_period,
                           transformations=transformations,
                           patch_multiplicity=patch_multiplicity,
-                          batch_size=batch_size)
+                          batch_size=batch_size,
+                          infinite=infinite)
 
   def get_patch_generators(self, patch_shape, batch_size=5):
     """Get both training generator and validation patched batch generators.
@@ -158,7 +164,7 @@ class Dataset:
                                    transformations=Transformations.CROP,
                                    batch_size=batch_size))
 
-  def get_full_volume_generators(self, patch_multiplicity=1):
+  def get_full_volume_generators(self, patch_multiplicity=1, infinite=True):
     """Get both training generator and validation full volume batch generators.
 
     Both yield full-volume images, without augmentation.
@@ -177,7 +183,7 @@ class Dataset:
                                      pool_refresh_period=1,
                                      transformations=Transformations.NONE,
                                      patch_multiplicity=patch_multiplicity),
-            self.get_val_generator(patch_multiplicity=patch_multiplicity))
+            self.get_val_generator(patch_multiplicity=patch_multiplicity, infinite=infinite))
 
   @property
   def n_classes(self):
@@ -239,7 +245,6 @@ class BraTS(NumpyDataset):
     4 for enhancing tumor
     0 for everything else
   """
-
   def __init__(self, root_path='../../data/preprocessed_datasets/brats/',
                validation_portion=.2):
     super(BraTS, self).__init__(root_path, validation_portion)
@@ -251,7 +256,7 @@ class BraTS(NumpyDataset):
   name = 'brats'
 
 
-class MRBrainS(NumpyDataset):
+class MRBrainS13(NumpyDataset):
   """ MRBrainS13 brain image segmentation challenge (anatomical)
 
   Labels:
@@ -260,15 +265,15 @@ class MRBrainS(NumpyDataset):
     3 White matter (including white matter lesions)
     0 Everyting else
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains13/',
                validation_portion=.2):
-    super(MRBrainS, self).__init__(root_path, validation_portion)
+    super(MRBrainS13, self).__init__(root_path, validation_portion)
 
   classes = ['background', 'csf', 'gray matter', 'white matter']
 
-  modalities = ['t1']
+  modalities = ['t1', 'ir', 'flair']
 
-  name = 'mrbrains'
+  name = 'mrbrains13'
 
 
 class IBSR(NumpyDataset):
@@ -291,23 +296,48 @@ class IBSR(NumpyDataset):
   name = 'ibsr'
 
 
-class WMH(NumpyDataset):
-  """MICCAI's 2017 White Matter Hyperintensities challenge dataset.
+class MRBrainS17(NumpyDataset):
+  """MICCAI's MRBrainS17 White Matter Hyperintensities challenge dataset.
 
   Labels:
       0 Background.
       1 White Matter Hyperintensities (WMH).
-      2 Other pathology
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/wmh/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains17/',
                validation_portion=.2):
-    super(WMH, self).__init__(root_path, validation_portion)
+    super(MRBrainS17, self).__init__(root_path, validation_portion)
 
-  classes = ['background', 'wmh', 'other pathology']
+  classes = ['background', 'wmh']
 
   modalities = ['t1', 'flair']
 
-  name = 'wmh'
+  name = 'mrbrains17'
+
+
+class MRBrainS18(NumpyDataset):
+  """MICCAI's MRBrainS18 Anatomical and White Matter Hyperintensities challenge dataset.
+
+  The original labels are 0 - Background, 1 - Cortical gray matter, 2 - Basal ganglia,
+  3 - White matter, 4 - White matter lesions, 5 - Cerebrospinal fluid in the extracerebral space,
+  6 - Ventricles, 7 - Cerebellum, 8 - Brain stem, 9 - Infarction, 10 - Other, but have been reduced
+  to:
+      0 Background.
+      1 White Matter Hyperintensities (WMH).
+      2 CSF.
+      3 Gray Matter.
+      4 White Matter.
+      -1 Ignore.
+  'Ignore' groups Cerebellum, Brain Stem, Infarction and Other.
+  """
+  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains18/',
+               validation_portion=.2):
+    super(MRBrainS18, self).__init__(root_path, validation_portion)
+
+  classes = ['background', 'wmh', 'csf', 'gray matter', 'white matter']
+
+  modalities = ['t1', 'flair', 'ir']
+
+  name = 'mrbrains18'
 
 
 class RawATLAS(Dataset):
@@ -402,7 +432,7 @@ class RawBraTS(Dataset):
   name = 'brats'
 
 
-class RawMRBrainS(Dataset):
+class RawMRBrainS13(Dataset):
   """ MRBrainS13 brain image segmentation challenge (anatomical).
 
   Labels:
@@ -413,24 +443,31 @@ class RawMRBrainS(Dataset):
   """
   def __init__(self, root_path='../../data/MRBrainS13DataNii/',
                validation_portion=.2):
-    super(RawMRBrainS, self).__init__(root_path, validation_portion)
+    super(RawMRBrainS13, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
-    data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata().astype(
-                                                                    'float32'))
-    data = data.reshape(data.shape + (1,))
+    t1 = resample_to_1mm(nib.load(data_path[0])).get_fdata()
+    ir = resample_to_1mm(nib.load(data_path[1])).get_fdata()
+    flair = resample_to_1mm(nib.load(data_path[2])).get_fdata()
+    brainmask = resample_to_1mm(nib.load(data_path[3]), interpolation='nearest').get_fdata()
+
+    data = np.stack([normalize(t1 * brainmask),
+                     normalize(ir * brainmask),
+                     normalize(flair * brainmask)], axis=-1).astype('float32')
 
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
     seg_path = seg_path[0]
-    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest'
-                          ).get_data().astype('int8')
+    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_data().astype('int8')
     seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
   def _get_data_path(self, path):
-    data_path = glob(path + '/T1.nii')[0]
+    data_path = [glob(path + '/T1.nii')[0],
+                 glob(path + '/T1_IR.nii')[0],
+                 glob(path + '/T2_FLAIR.nii')[0]
+,                 glob(path + '/brainmask.nii.gz')[0]]
     return data_path
 
   def _get_seg_paths(self, path):
@@ -443,9 +480,9 @@ class RawMRBrainS(Dataset):
 
   classes = ['background', 'csf', 'gray matter', 'white matter']
 
-  modalities = ['t1']
+  modalities = ['t1', 'ir', 'flair']
 
-  name = 'mrbrains'
+  name = 'mrbrains13'
 
 
 class RawIBSR(Dataset):
@@ -487,7 +524,6 @@ class RawIBSR(Dataset):
   def _get_paths(self, root_path):
     return glob(root_path + '/IBSR*')
 
-
   classes = ['background', 'csf', 'gray matter', 'white matter']
 
   modalities = ['t1']
@@ -495,18 +531,18 @@ class RawIBSR(Dataset):
   name = 'ibsr'
 
 
-class RawWMH(Dataset):
-  """MICCAI's 2017 White Matter Hyperintensities challenge dataset.
+class RawMRBrainS17(Dataset):
+  """MICCAI's MRBrainS17 White Matter Hyperintensities challenge dataset.
 
   Labels:
       0 Background.
       1 White Matter Hyperintensities (WMH).
-      2 Other pathology
+      2 Other pathology --> This label is merged with background and is not present.
   """
 
   def __init__(self, root_path='../../data/WMH_MICCAI17/',
                validation_portion=.2):
-    super(RawWMH, self).__init__(root_path, validation_portion)
+    super(RawMRBrainS17, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
@@ -522,6 +558,8 @@ class RawWMH(Dataset):
     seg.affine[np.abs(seg.affine) < .000001] = 0
     seg = resample_to_1mm(seg, interpolation='nearest').get_data().astype('int8')
     seg = seg.reshape(seg.shape + (1,))
+    # Merge label 'other pathology' with background.
+    seg[seg == 2] = 0
     return (data, seg)
 
   def _get_data_path(self, path):
@@ -536,16 +574,136 @@ class RawWMH(Dataset):
   def _get_paths(self, root_path):
     return glob(root_path + '/*/*/')
 
-  classes = ['background', 'wmh', 'other pathology']
+  classes = ['background', 'wmh']
 
   modalities = ['t1', 'flair']
 
-  name = 'wmh'
+  name = 'mrbrains17'
+
+
+class RawMRBrainS18(Dataset):
+  """MICCAI's MRBrainS18 Anatomical and White Matter Hyperintensities challenge dataset.
+
+  The original labels are 0 - Background, 1 - Cortical gray matter, 2 - Basal ganglia,
+  3 - White matter, 4 - White matter lesions, 5 - Cerebrospinal fluid in the extracerebral space,
+  6 - Ventricles, 7 - Cerebellum, 8 - Brain stem, 9 - Infarction, 10 - Other, but have been reduced
+  to:
+      0 Background.
+      1 White Matter Hyperintensities (WMH).
+      2 CSF.
+      3 Gray Matter.
+      4 White Matter.
+      -1 Ignore.
+  'Ignore' groups Cerebellum, Brain Stem, Infarction and Other.
+  """
+  def __init__(self, root_path='../../data/MICCAI18_WMH/',
+               validation_portion=.2):
+    super(RawMRBrainS18, self).__init__(root_path, validation_portion)
+
+  def load_path(self, path):
+    data_paths = self._get_data_path(path)
+    T1 = resample_to_1mm(nib.load(data_paths[1])).get_fdata().astype('float32')
+    IR = resample_to_1mm(nib.load(data_paths[2])).get_fdata().astype('float32')
+    FLAIR = resample_to_1mm(nib.load(data_paths[3])).get_fdata().astype('float32')
+
+    brainmask = resample_to_1mm(nib.load(data_paths[0]), interpolation='nearest').get_fdata()
+
+    data = np.stack([normalize(T1 * brainmask),
+                     normalize(FLAIR * brainmask),
+                     normalize(IR * brainmask)],
+                     axis=-1)
+
+    seg_path = self._get_seg_path(path)
+    seg = nib.load(seg_path)
+    seg.affine[np.abs(seg.affine) < .000001] = 0
+    seg = resample_to_1mm(seg, interpolation='nearest').get_data().astype('int8')
+    seg = seg.reshape(seg.shape + (1,))
+    # Unify 1 and 2 as gray matter; 5 and 6 as CSF; 7, 8, 9, 10 as Ignore.
+    # Note: this sends Cerebellum, Brain Stem, Infarction and Other to background. This makes the
+    # dataset unfit for training, but it's fine for validation with Dice, because those sections
+    # will be ignored.
+    # 1, 2 -> 3
+    # 3 -> 4
+    # 4 -> 1
+    # 5, 6 -> 2
+    # 7, 8, 9, 10 -> 5
+    seg[seg >= 7] = -1
+    seg[seg == 1] = 2
+    seg[seg == 4] = 1
+    seg[seg == 3] = 4
+    seg[seg == 2] = 3
+    seg[seg >= 5] = 2
+    return (data, seg)
+
+  def _get_data_path(self, path):
+    data_path = [glob(path + '/pre/reg_brainmask2.nii.gz')[0],
+                 glob(path + '/pre/reg_T1.nii.gz')[0],
+                 glob(path + '/pre/reg_IR.nii.gz')[0],
+                 glob(path + '/pre/FLAIR.nii.gz')[0]]
+    return data_path
+
+  def _get_seg_path(self, path):
+    return glob(path + '/segm.nii.gz')[0]
+
+  def _get_paths(self, root_path):
+    return glob(root_path + '/*/')
+
+  classes = ['background', 'wmh', 'csf', 'gray matter', 'white matter']
+
+  modalities = ['t1', 'flair', 'ir']
+
+  name = 'mrbrains18'
+
+
+class MultiDataset(NumpyDataset):
+  """Combination of multiple datasets."""
+
+  def __init__(self, datasets):
+    # TODO: balance dataset sizes.
+    self.datasets = datasets
+    # self.train_paths = [path for dataset in datasets for path in dataset.train_paths]
+    # self.val_paths = [path for dataset in datasets for path in dataset.val_paths]
+    self.train_paths = self._aggregate_paths([dataset.train_paths for dataset in datasets])
+    np.random.shuffle(self.train_paths)
+    self.val_paths = self._aggregate_paths([dataset.val_paths for dataset in datasets])
+    np.random.shuffle(self.val_paths)
+    self.modalities = list(set.intersection(*[set(dataset.modalities)
+                                              for dataset in datasets]))
+    assert(self.modalities), "Given datasets don't have intersecting modalities"
+    self.classes = ['background'] + [clss for dataset in datasets for clss in dataset.classes[1:]]
+    self.name = '_'.join(dataset.name for dataset in datasets)
+
+  def load_path(self, path):
+    x, y = super(MultiDataset, self).load_path(path)
+    label_offset = 0
+    for dataset in self.datasets:
+      # FIXME: this is ugly.
+      if path.startswith(dataset.root_path):
+        source_dataset = dataset
+        break
+      label_offset += dataset.n_classes - 1
+    x_filtered = Tools.filter_modalities(source_dataset.modalities, self.modalities, x)
+    y[y > 0] += label_offset
+    return x_filtered, y
+
+  @staticmethod
+  def _aggregate_paths(paths_list):
+    """Combine paths with balanced amounts from each list of paths.
+
+    Args:
+        paths_list (list of lists): List of lists of paths to be aggregated.
+    """
+    max_len_paths = max(len(paths) for paths in paths_list)
+    aggregated_paths = []
+    for paths in paths_list:
+      aggregated_paths.extend(itertools.islice(itertools.cycle(paths), max_len_paths))
+    return aggregated_paths
 
 
 if __name__ == '__main__':
-  # preprocess_dataset(RawMRBrainS(), '../../data/preprocessed_datasets/mrbrains')
-  # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/atlas')
-  # preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/brats')
-  # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/ibsr')
-  preprocess_dataset(RawWMH(), '../../data/preprocessed_datasets/wmh')
+  preprocess_dataset(RawMRBrainS13(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawMRBrainS17(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawMRBrainS18(), '../../data/preprocessed_datasets/')

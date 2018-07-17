@@ -2,9 +2,10 @@
 
 import keras
 import keras.backend as K
-from keras.callbacks import Callback
+from keras.callbacks import Callback, TensorBoard
 
 import numpy as np
+import os
 
 import tensorflow as tf
 
@@ -45,7 +46,8 @@ class ContinuousMetrics:
             per-class score for each voxel)
 
     Returns:
-        tensor: coefficient value
+        tensor: coefficient value.
+
     """
     # shape notation: b = batch index, d = depth, w = width, h = height
     # y_true shape: (b, w, h, d, 1)
@@ -98,7 +100,8 @@ class ContinuousMetrics:
             label (0) is not averaged.
 
     Returns:
-        tensor: coefficient value
+        tensor: coefficient value.
+
     """
     def _mean_dice_coef(y_true, y_pred):
       # y_true is in sparse notation (one category number per voxel), while
@@ -107,7 +110,7 @@ class ContinuousMetrics:
       n_classes = K.int_shape(y_pred)[-1]
       labels = range(ignore_background, n_classes)
       n_labels = n_classes - ignore_background
-      mean = None
+      mean = 0
       for label in labels:
         # label is the positive label.
 
@@ -128,10 +131,7 @@ class ContinuousMetrics:
         den = num + fp + fn + 1e-5
         coef = num / den
 
-        if mean is None:
-          mean = coef
-        else:
-          mean += coef
+        mean += coef
       mean *= 1 / n_labels
       return mean
 
@@ -145,6 +145,92 @@ class ContinuousMetrics:
       return 1 - ContinuousMetrics.mean_dice_coef(ignore_background)(y_true, y_pred)
 
     return _mean_dice_loss
+
+
+  @staticmethod
+  def selective_dice_coef(y_true, y_pred):
+    """Metric that computes the averaged one-versus-all dice coefficient over present labels.
+
+    The coefficient between two labelings is computed by averaging the dice coefficient of each
+    label that appears on the ground truth patch (y_true[i, ...]) except background, against the
+    rest.
+
+    Args:
+        y_true (tensor): ground truth segmentation, in sparse notation (one
+            category label per voxel)
+        y_pred (tensor): predicted segmentation in categorical notation (a
+            per-class score for each voxel)
+
+    Returns:
+        tensor: coefficient value
+
+    """
+    y_pred_shape = K.shape(y_pred)
+    print(y_pred_shape)
+
+    n_labels = y_pred_shape[-1]
+    batch_size = y_pred_shape[0]
+    y_true = K.reshape(y_true, (batch_size, -1, 1))
+    y_pred = K.reshape(y_pred, (batch_size, -1, n_labels))[1:]
+
+    positive_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_labels)[1:]
+
+    # labels_mask[i, j] stores whether the ground truth patch i contains label j.
+    labels_mask = K.cast(K.any(positive_mask, axis=1), 'float32')
+    # This is an ugly hack for labels_mask[: 0] - 0
+    # labels_mask = labels_mask * K.cast(K.not_equal(labels_mask, 0), 'float32')
+    negative_mask = 1 - positive_mask
+    # True Positive: sum of correct scores assigned to positive labels
+    tp = K.sum(y_pred * positive_mask, axis=1)
+    # False Positive: sum of positive scores assigned to negative labels
+    fp = K.sum(y_pred * negative_mask, axis=1)
+    # False Negative: sum of negative scores assigned to positive label
+    # This assumes that the sum of scores is 1 (output from softmax)
+    fn = K.sum((1 - y_pred) * positive_mask, axis=1)
+
+    nums = 2 * tp
+    dens = nums + fp + fn  # + 1e-5
+    coefs = (nums / dens) * labels_mask
+
+    means = K.sum(coefs, axis=1) / K.sum(labels_mask, axis=1)  # + 1e-5
+    return K.mean(means)
+
+    # mean = 0
+    # for patch_idx in range(batch_size):
+    #   patch_pred = y_pred[patch_idx]
+    #   patch_true = y_true[patch_idx]
+
+    # for label in range(1, n_labels):
+    #   # label is the positive label.
+    #   positive_mask = K.equal(y_true, label)
+    #   positive_mask = K.cast(positive_mask, 'float')
+    #   negative_mask = 1 - positive_mask
+    #   label_slice = y_pred[..., label:label + 1]
+    #   for patch_idx in range(batch_size):
+    #     # True Positive: sum of correct scores assigned to positive label
+    #     tp = K.sum(label_slice[patch_idx, ...] * positive_mask)
+    #     # / (K.sum(positive_mask) + 1e-4)
+    #     # False Positive: sum of positive scores assigned to negative labels
+    #     fp = K.sum(y_pred[..., label:label + 1] * (negative_mask))
+    #     # / (K.sum(negative_mask) + 1e-4)
+    #     # False Negative: sum of negative scores assigned to positive label
+    #     # This assumes that the sum of scores is 1 (output from softmax)
+    #     fn = K.sum((1 - y_pred[..., label:label + 1]) * positive_mask)
+    #     # / (K.sum(positive_mask) + 1e-4)
+    #     num = 2 * tp
+    #     den = num + fp + fn + 1e-5
+    #     coef = num / den
+
+    #     mean += coef
+    # mean *= 1 / n_labels
+    # return mean
+
+
+  @staticmethod
+  def selective_dice_loss(y_true, y_pred):
+    """Selective dice loss, same as selective dice coefficient but decreasing."""
+    return 1 - ContinuousMetrics.selective_dice_coef(y_true, y_pred)
+
 
 ################################################################################
 ############################## DISCRETE METRICS ################################
@@ -266,14 +352,14 @@ class NumpyMetrics:
 
     Returns:
       float: accuracy
-    """
 
+    """
     assert(y_true.shape == y_pred.shape)
     return np.sum(y_true == y_pred) / y_true.size
 
   @staticmethod
   def dice_coef(y_true, y_pred):
-    """ Compute the dice coefficient between two labelings.
+    """Compute the dice coefficient between two labelings.
 
     Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
     tp = true positives, fp = false positives, fn = false negatives.
@@ -284,6 +370,7 @@ class NumpyMetrics:
         y_true (Numpy array): ground truth segmentation, in sparse notation (one
         category label per voxel)
         y_pred (Numpy array): predicted segmentation, categorical notation
+
     """
 
     positive_mask = (y_true != 0)
@@ -400,11 +487,9 @@ class FullVolumeValidationCallback(Callback):
         X, Y = next(self.generators[key])
         xmin, xmax, ymin, ymax, zmin, zmax = self.generators[key].get_bounding_box(X)
         X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
-        print("Shape:::::", X_cropped.shape)
         Y_pred_cropped = self.validation_model.predict(X_cropped)
         Y = np.squeeze(Y, axis=-1)
         Y_pred = np.zeros_like(Y)
-        print("shapes:", Y_pred_cropped.shape, Y_pred.shape, Y.shape)
         Y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = np.argmax(Y_pred_cropped, axis=-1)
         metric = MetricsMonitor.MetricsMonitor.getMetricsForWholeSegmentation(Y, Y_pred,
                                                                               labels=self.labels)[0]
@@ -423,7 +508,7 @@ class FullVolumeValidationCallback(Callback):
     """
     try:
       previous_metrics = np.load(self.metrics_savefile + '.npz')
-      metrics = {key: np.append(previous_metrics[key], new_metrics)
+      metrics = {key: np.append(previous_metrics[key], new_metrics, axis=0)
                 for (key, new_metrics) in self.history.items()}
       # metrics = np.append(previous_metrics, self.history, axis=0)
     except FileNotFoundError:
@@ -431,3 +516,50 @@ class FullVolumeValidationCallback(Callback):
       metrics = {key: np.stack(history) for (key, history) in self.history.items()}
     print('Metrics history:\n', metrics)
     np.savez(self.metrics_savefile, **metrics)
+
+
+class TrainValTensorBoard(TensorBoard):
+  """TensorBoard Callback that combines train and validation in the same plot."""
+
+  def __init__(self, log_dir='./logs', **kwargs):
+    """Initialize Callback.
+
+    Args:
+        log_dir (str, optional): tensorboard logging dir
+        **kwargs: same kwargs as TensorBoard callback
+    """
+    # Make the original `TensorBoard` log to a subdirectory 'training'
+    training_log_dir = os.path.join(log_dir, 'training')
+    super(TrainValTensorBoard, self).__init__(training_log_dir, **kwargs)
+
+    # Log the validation metrics to a separate subdirectory
+    self.val_log_dir = os.path.join(log_dir, 'validation')
+
+  def set_model(self, model):
+    """Setup writer for validation metrics."""
+    self.val_writer = tf.summary.FileWriter(self.val_log_dir)
+    super(TrainValTensorBoard, self).set_model(model)
+
+  def on_epoch_end(self, epoch, logs=None):
+    """Pop the validation logs and handle them separately with `self.val_writer`.
+
+    Also rename the keys so they can be plotted on the same figure with the training metrics.
+    """
+    logs = logs or {}
+    val_logs = {k.replace('val_', ''): v for k, v in logs.items() if k.startswith('val_')}
+    for name, value in val_logs.items():
+        summary = tf.Summary()
+        summary_value = summary.value.add()
+        summary_value.simple_value = value.item()
+        summary_value.tag = name
+        self.val_writer.add_summary(summary, epoch)
+    self.val_writer.flush()
+
+    # Pass the remaining logs to `TensorBoard.on_epoch_end`
+    logs = {k: v for k, v in logs.items() if not k.startswith('val_')}
+    super(TrainValTensorBoard, self).on_epoch_end(epoch, logs)
+
+  def on_train_end(self, logs=None):
+    """Clean up."""
+    super(TrainValTensorBoard, self).on_train_end(logs)
+    self.val_writer.close()
