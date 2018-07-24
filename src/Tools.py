@@ -114,7 +114,7 @@ def get_dataset_savedir(dataset, loss=None):
           `sparse_categorical_crossentropy`
 
   """
-  savedir = 'checkpoints/unet_%s' % (dataset.name)
+  savedir = '../models/unet_%s' % (dataset.name)
   if loss is not None and loss != 'sparse_categorical_crossentropy':
     savedir += '_' + (loss if isinstance(loss, str) else loss.__name__)
   return savedir

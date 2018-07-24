@@ -24,8 +24,12 @@ mrbrains13_val = Datasets.MRBrainS13(validation_portion=1)
 ibsr = Datasets.IBSR()
 mrbrains17 = Datasets.MRBrainS17()
 mrbrains18 = Datasets.MRBrainS18(validation_portion=1)
-mrbrains17_ibsr = Datasets.MultiDataset([mrbrains17, ibsr])
-mrbrains17_13 = Datasets.MultiDataset([mrbrains17, mrbrains13])
+mrbrains17_ibsr = Datasets.MultiDataset([mrbrains17, ibsr], mrbrains18)
+mrbrains17_ibsr_ignore_bg = Datasets.MultiDataset([mrbrains17, ibsr], mrbrains18,
+                                                  ignore_backgrounds=True)
+mrbrains17_13 = Datasets.MultiDataset([mrbrains17, mrbrains13], mrbrains18)
+mrbrains17_13_ignore_bg = Datasets.MultiDataset([mrbrains17, mrbrains13], mrbrains18,
+                                                ignore_backgrounds=True)
 
 tumor_tasks = [
          {"name": "tumor",
@@ -75,15 +79,19 @@ def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
 
   model = Models.UNet(n_classes, depth=net_depth, n_channels=n_channels)
 
-  print('patch_multiplicity', model.patch_multiplicity)
+  # print('patch_multiplicity', model.patch_multiplicity)
+  # patch_tr_gen = dataset.get_train_generator(patch_shape, batch_size=batch_size)
+  # patch_val_gen = val_dataset.get_val_generator(patch_shape=(128, 128, 128))
+
   patch_tr_gen, patch_val_gen = dataset.get_patch_generators(patch_shape, batch_size=batch_size)
-  full_tr_gen, full_val_gen = dataset.get_full_volume_generators(model.patch_multiplicity)
+  # full_tr_gen, full_val_gen = dataset.get_full_volume_generators(model.patch_multiplicity)
+
 
   model.compile(loss=loss,
                 optimizer='adam',
                 metrics=[sparse_categorical_accuracy,
-                         Metrics.ContinuousMetrics.dice_coef,
-                         Metrics.ContinuousMetrics.mean_dice_coef(),
+                         Metrics.dice_coef,
+                         Metrics.mean_dice_coef,
                          # Metrics.DiscreteMetrics.mean_dice_coef(n_classes)
                          ])
 
@@ -112,8 +120,8 @@ def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
   #   return lr * .99
   # lr_sched = LearningRateScheduler(sched, verbose=1)
 
-  full_volume_validation = Metrics.FullVolumeValidationCallback(model,
-      full_val_gen, metrics_savefile=full_volume_metrics_file, validate_every_n_epochs=10)
+  # full_volume_validation = Metrics.FullVolumeValidationCallback(model,
+  #     full_val_gen, metrics_savefile=full_volume_metrics_file, validate_every_n_epochs=10)
 
   h = model.fit_generator(patch_tr_gen,
                           steps_per_epoch=steps_per_epoch,
@@ -124,7 +132,7 @@ def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
                           callbacks=[model_checkpoint,
                                      tensorboard,
                                      # lr_sched,
-                                     full_volume_validation
+                                    #  full_volume_validation
                                      ])
 
   # Write metrics to a csv.
@@ -348,23 +356,22 @@ def visualize_multiunet():
 if __name__ == '__main__':
   # --------------------------------- MRBrainS13 ---------------------------------------------------
   # train_unet(mrbrains13, epochs=50)
-  train_unet(mrbrains13, epochs=10, loss=Metrics.ContinuousMetrics.dice_loss)
-  train_unet(mrbrains13, epochs=10, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # train_unet(mrbrains13, epochs=30, loss=Metrics.Wmean_dice_loss)
 
   # validate_unet(mrbrains13)
-  validate_unet(mrbrains13, loss=Metrics.ContinuousMetrics.dice_loss)
-  validate_unet(mrbrains13, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # validate_unet(mrbrains13, loss=Metrics.dice_loss)
+  # validate_unet(mrbrains13, loss=Metrics.mean_dice_loss)
 
   # visualize_unet(mrbrains13)
 
   # --------------------------------- IBSR ---------------------------------------------------------
   # train_unet(ibsr, epochs=100)
-  # train_unet(ibsr, epochs=100, loss=Metrics.ContinuousMetrics.dice_loss)
-  # train_unet(ibsr, epochs=50, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # train_unet(ibsr, epochs=100, loss=Metrics.dice_loss)
+  # train_unet(ibsr, epochs=50, loss=Metrics.mean_dice_loss)
 
   # validate_unet(ibsr)
-  # validate_unet(ibsr, loss=Metrics.ContinuousMetrics.dice_loss)
-  # validate_unet(ibsr, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # validate_unet(ibsr, loss=Metrics.dice_loss)
+  # validate_unet(ibsr, loss=Metrics.mean_dice_loss)
   # validate_unet(ibsr, mrbrains13_val)
 
   # visualize_unet(ibsr)
@@ -381,42 +388,60 @@ if __name__ == '__main__':
 
   # --------------------------------- MRBrainS17 ---------------------------------------------------
   # train_unet(mrbrains17, epochs=100)
-  # train_unet(mrbrains17, epochs=100, loss=Metrics.ContinuousMetrics.dice_loss)
-  # train_unet(mrbrains17, epochs=50, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # train_unet(mrbrains17, epochs=100, loss=Metrics.dice_loss)
+  # train_unet(mrbrains17, epochs=50, loss=Metrics.mean_dice_loss)
 
   # validate_unet(mrbrains17)
-  # validate_unet(mrbrains17, loss=Metrics.ContinuousMetrics.dice_loss)
-  # validate_unet(mrbrains17, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # validate_unet(mrbrains17, loss=Metrics.dice_loss)
+  # validate_unet(mrbrains17, loss=Metrics.mean_dice_loss)
 
   # visualize_unet(mrbrains17)
 
   # --------------------------------- MRBrainS17_IBSR ----------------------------------------------
-  # train_unet(mrbrains17_ibsr, epochs=100)
-  # train_unet(mrbrains17_ibsr, epochs=100, loss=Metrics.ContinuousMetrics.mean_dice_loss())
-  # train_unet(mrbrains17_ibsr, epochs=50, loss=Metrics.ContinuousMetrics.selective_dice_loss)
+  # train_unet(mrbrains17_ibsr, epochs=50)
+  # train_unet(mrbrains17_ibsr, epochs=50, loss=Metrics.dice_loss)
+  # train_unet(mrbrains17_ibsr, epochs=50, loss=Metrics.mean_dice_loss)
+  # train_unet(mrbrains17_ibsr, epochs=200, loss=Metrics.selective_dice_loss)
+  # train_unet(mrbrains17_ibsr_ignore_bg, epochs=50,
+  #            loss=Metrics.selective_sparse_categorical_crossentropy)
+  train_unet(mrbrains17_ibsr_ignore_bg, epochs=100,
+             loss=Metrics.improved_selective_sparse_categorical_crossentropy)
+
 
   # validate_unet(mrbrains17_ibsr)
   # validate_unet(mrbrains17_ibsr, mrbrains18)
-  # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.ContinuousMetrics.dice_loss)
-  # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.ContinuousMetrics.mean_dice_loss())
-  # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.ContinuousMetrics.selective_dice_loss)
+  # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.dice_loss)
+  # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.mean_dice_loss)
+  validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.selective_dice_loss)
+  validate_unet(mrbrains17_ibsr_ignore_bg, mrbrains18,
+                loss=Metrics.selective_sparse_categorical_crossentropy)
+  validate_unet(mrbrains17_ibsr_ignore_bg, mrbrains18,
+                loss=Metrics.improved_selective_sparse_categorical_crossentropy)
 
-  # visualize_unet(mrbrains17_ibsr, loss=Metrics.ContinuousMetrics.dice_loss)
+  # visualize_unet(mrbrains17_ibsr, loss=Metrics.dice_loss)
   # visualize_unet(mrbrains17_ibsr, mrbrains18)
 
   # ---------------------------------- MRBrainS17_13 -----------------------------------------------
   # print(mrbrains17_13.train_paths)
-  # train_unet(mrbrains17_13, epochs=100)
-  # train_unet(mrbrains17_13, epochs=50, loss=Metrics.ContinuousMetrics.dice_loss)
-  # train_unet(mrbrains17_13, epochs=100, loss=Metrics.ContinuousMetrics.mean_dice_loss())
-  # train_unet(mrbrains17_13, epochs=100, loss=Metrics.ContinuousMetrics.selective_dice_loss)
+  # train_unet(mrbrains17_13, epochs=50)
+  # train_unet(mrbrains17_13, epochs=50, loss=Metrics.dice_loss)
+  # train_unet(mrbrains17_13, epochs=50, loss=Metrics.mean_dice_loss)
+  train_unet(mrbrains17_13, epochs=100, loss=Metrics.selective_dice_loss)
+  # train_unet(mrbrains17_13_ignore_bg, epochs=100,
+  #            loss=Metrics.selective_sparse_categorical_crossentropy)
+  train_unet(mrbrains17_13_ignore_bg, epochs=100,
+             loss=Metrics.improved_selective_sparse_categorical_crossentropy)
 
   # validate_unet(mrbrains17_13, mrbrains18)
-  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.ContinuousMetrics.dice_loss)
-  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.ContinuousMetrics.mean_dice_loss())
-  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.ContinuousMetrics.selective_dice_loss)
+  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.dice_loss)
+  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.mean_dice_loss)
+  validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.selective_dice_loss)
+  # validate_unet(mrbrains17_13_ignore_bg, mrbrains18,
+  #               loss=Metrics.selective_sparse_categorical_crossentropy)
+  validate_unet(mrbrains17_13_ignore_bg, mrbrains18,
+                loss=Metrics.improved_selective_sparse_categorical_crossentropy)
 
-  # visualize_unet(mrbrains17_13, mrbrains18, loss=Metrics.ContinuousMetrics.mean_dice_loss())
+  # visualize_unet(mrbrains17_13, mrbrains18, loss=Metrics.mean_dice_loss)
   # visualize_unet(mrbrains17_13, mrbrains18)
 
   # ---------------------------------- MultiUNet ---------------------------------------------------

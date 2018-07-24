@@ -264,7 +264,7 @@ class BatchGenerator:
 
 
 class ModalityFilter:
-  """Batch Generator wrapper thar drops modalities.
+  """Batch Generator wrapper that drops modalities.
 
   This enables to feed nets that are trained on a subset of the modalities.
   """
@@ -292,10 +292,46 @@ class ModalityFilter:
     return x_filtered, y
 
   def __iter__(self):
-    """Return an iterable."""
+    """Return an iterable (the wrapper itself)."""
     return self
 
   def __getattr__(self, name):
+    """Forward every other method to the batch generator."""
+    return getattr(self.batch_generator, name)
+
+
+class BackgroundFilter:
+  """Batch Generator wrapper that sets background labels to -1.
+
+  This allows the use of a loss function that ignores the -1.
+  """
+
+  def __init__(self, batch_generator):
+    """Build BackgroundFilter.
+
+    Args:
+        batch_generator (BatchGenerator): generator to filter.
+
+    """
+    self.batch_generator = batch_generator
+
+  def __next__(self):
+    """Get a batch from the generator and set all zeros to -1.
+
+    Returns:
+        tuple: (x, y), filtered batch.
+    """
+    x, y = next(self.batch_generator)
+    x_filtered = x
+    x_filtered[x_filtered == 0] = -1
+    return x_filtered, y
+
+  def __iter__(self):
+    """Return an iterable (the wrapper itself)."""
+    return self
+
+  def __getattr__(self, name):
+    """Forward every other method to the batch generator."""
     return getattr(self.batch_generator, name)
 
 

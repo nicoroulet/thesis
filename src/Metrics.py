@@ -24,212 +24,220 @@ spec.loader.exec_module(MetricsMonitor)
 # Continuous metrics operate on the class scores.
 
 
-class ContinuousMetrics:
-  """Continuous metrics, tensor-based implementation.
+def dice_coef(y_true, y_pred):
+  """Compute the dice coefficient between two labelings.
 
-  Can be used for training because gradients can be computed for backpropagation
+  Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
+  tp = true positives, fp = false positives, fn = false negatives.
+  In a multiclass problem we consider all nonzero labels to be positive
+  (0 is background).
+
+  Args:
+      y_true (tensor): ground truth segmentation labels, in sparse notation.
+      y_pred (tensor): predicted segmentation scores.
+
+  Returns:
+      tensor: coefficient value.
+
   """
+  # shape notation: b = batch index, d = depth, w = width, h = height
+  # y_true shape: (b, w, h, d, 1)
+  # y_pred shape: (b, w, h, d, n_classes)
+  n_classes = K.shape(y_pred)[-1]
+  # n_classes = K.print_tensor(n_classes, message="n_classes = ")
 
-  @staticmethod
-  def dice_coef(y_true, y_pred):
-    """Compute the dice coefficient between two labelings.
+  # y_true_int shape: (b, w, h, d)
+  y_true_int = K.cast(K.squeeze(y_true, axis=-1), 'int32')
 
-    Dice coefficient is defined as 2 * tp / (2 * tp + fp + fn), where
-    tp = true positives, fp = false positives, fn = false negatives.
-    In a multiclass problem we consider all nonzero labels to be positive
-    (0 is background).
+  # positive_mask shape: (b, w, h, d, 1)
+  positive_mask = K.clip(y_true, 0, 1)
+  # correct_mask shape: (b, w, h, d, n_classes)
+  correct_mask = K.one_hot(y_true_int, n_classes)
+  # correct_scores shape: (b, w, h, d, n_classes)
+  correct_scores = correct_mask * y_pred
+  # Scores given to the correct labels
+  # correct_scores_sum shape: (b, w, h, d, 1)
+  correct_scores_sum = K.sum(correct_scores, axis=-1, keepdims=True)
+  # True Positive: sum of correct scores assigned to positive label
+  tp = K.sum(positive_mask * correct_scores_sum)
 
-    Args:
-        y_true (tensor): ground truth segmentation, in sparse notation (one
-            category label per voxel)
-        y_pred (tensor): predicted segmentation in categorical notation (a
-            per-class score for each voxel)
+  bg_scores = y_pred[..., 0:1]
+  # Positive scores given to the background labels
+  fp = K.sum((1 - positive_mask) * (1 - bg_scores))
 
-    Returns:
-        tensor: coefficient value.
+  # Background scores given to the positive labels.
+  fn = K.sum(bg_scores * positive_mask)
 
-    """
-    # shape notation: b = batch index, d = depth, w = width, h = height
-    # y_true shape: (b, w, h, d, 1)
-    # y_pred shape: (b, w, h, d, n_classes)
-    n_classes = K.shape(y_pred)[-1]
-    # n_classes = K.print_tensor(n_classes, message="n_classes = ")
-
-    # y_true_int shape: (b, w, h, d)
-    y_true_int = K.cast(K.squeeze(y_true, axis=-1), 'int32')
-
-    # positive_mask shape: (b, w, h, d, 1)
-    positive_mask = K.clip(y_true, 0, 1)
-    # correct_mask shape: (b, w, h, d, n_classes)
-    correct_mask = K.one_hot(y_true_int, n_classes)
-    # correct_scores shape: (b, w, h, d, n_classes)
-    correct_scores = correct_mask * y_pred
-    # Scores given to the correct labels
-    # correct_scores_sum shape: (b, w, h, d, 1)
-    correct_scores_sum = K.sum(correct_scores, axis=-1, keepdims=True)
-    # True Positive: sum of correct scores assigned to positive label
-    tp = K.sum(positive_mask * correct_scores_sum)
-
-    bg_scores = y_pred[..., 0:1]
-    # Positive scores given to the background labels
-    fp = K.sum((1 - positive_mask) * (1 - bg_scores))
-
-    # Background scores given to the positive labels.
-    fn = K.sum(bg_scores * positive_mask)
-
-    num = 2 * tp
-    den = num + fn + fp + 1e-4
-    # num = K.print_tensor(num, message="num = ")
-    # den = K.print_tensor(den, message="den = ")
-    return num / den
-
-  @staticmethod
-  def dice_loss(y_true, y_pred):
-    """Dice loss, same as dice coefficient but decreasing."""
-    return 1 - ContinuousMetrics.dice_coef(y_true, y_pred)
-
-  @staticmethod
-  def mean_dice_coef(ignore_background=True):
-    """Metric that computes the averaged one-versus-all dice coefficient.
-
-    The coefficient between two labelings is computed by averaging the dice
-    coefficient of each label against the rest.
-
-    Args:
-        ignore_background (optional, bool): if True, dice for the background
-            label (0) is not averaged.
-
-    Returns:
-        tensor: coefficient value.
-
-    """
-    def _mean_dice_coef(y_true, y_pred):
-      # y_true is in sparse notation (one category number per voxel), while
-      # y_pred is in categorical notation (a probability distribution for each
-      #                                    voxel)
-      n_classes = K.int_shape(y_pred)[-1]
-      labels = range(ignore_background, n_classes)
-      n_labels = n_classes - ignore_background
-      mean = 0
-      for label in labels:
-        # label is the positive label.
-
-        positive_mask = K.equal(y_true, label)
-        positive_mask = K.cast(positive_mask, 'float')
-        negative_mask = 1 - positive_mask
-        # True Positive: sum of correct scores assigned to positive label
-        tp = K.sum(y_pred[..., label:label + 1] * positive_mask)
-        # / (K.sum(positive_mask) + 1e-4)
-        # False Positive: sum of positive scores assigned to negative labels
-        fp = K.sum(y_pred[..., label:label + 1] * (negative_mask))
-        # / (K.sum(negative_mask) + 1e-4)
-        # False Negative: sum of negative scores assigned to positive label
-        # This assumes that the sum of scores is 1 (output from softmax)
-        fn = K.sum((1 - y_pred[..., label:label + 1]) * positive_mask)
-        # / (K.sum(positive_mask) + 1e-4)
-        num = 2 * tp
-        den = num + fp + fn + 1e-5
-        coef = num / den
-
-        mean += coef
-      mean *= 1 / n_labels
-      return mean
-
-    return _mean_dice_coef
-
-  @staticmethod
-  def mean_dice_loss(ignore_background=True):
-    """Mean dice loss, same as mean dice coefficient but decreasing."""
-
-    def _mean_dice_loss(y_true, y_pred):
-      return 1 - ContinuousMetrics.mean_dice_coef(ignore_background)(y_true, y_pred)
-
-    return _mean_dice_loss
+  num = 2 * tp
+  den = num + fn + fp + 1e-4
+  # num = K.print_tensor(num, message="num = ")
+  # den = K.print_tensor(den, message="den = ")
+  return num / den
 
 
-  @staticmethod
-  def selective_dice_coef(y_true, y_pred):
-    """Metric that computes the averaged one-versus-all dice coefficient over present labels.
+def dice_loss(y_true, y_pred):
+  """Dice loss, same as dice coefficient but decreasing."""
+  return 1 - dice_coef(y_true, y_pred)
 
-    The coefficient between two labelings is computed by averaging the dice coefficient of each
-    label that appears on the ground truth patch (y_true[i, ...]) except background, against the
-    rest.
 
-    Args:
-        y_true (tensor): ground truth segmentation, in sparse notation (one
-            category label per voxel)
-        y_pred (tensor): predicted segmentation in categorical notation (a
-            per-class score for each voxel)
+def mean_dice_coef(y_true, y_pred):
+  """Metric that computes the averaged one-versus-all dice coefficient.
 
-    Returns:
-        tensor: coefficient value
+  The coefficient between two labelings is computed by averaging the dice
+  coefficient of each label against the rest.
 
-    """
-    y_pred_shape = K.shape(y_pred)
-    print(y_pred_shape)
+  Args:
+      y_true (tensor): ground truth segmentation labels, in sparse notation.
+      y_pred (tensor): predicted segmentation scores.
 
-    n_labels = y_pred_shape[-1]
-    batch_size = y_pred_shape[0]
-    y_true = K.reshape(y_true, (batch_size, -1, 1))
-    y_pred = K.reshape(y_pred, (batch_size, -1, n_labels))[1:]
+  Returns:
+      tensor: coefficient value.
 
-    positive_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_labels)[1:]
+  """
+  # y_true is in sparse notation (one category number per voxel), while
+  # y_pred is in categorical notation (a probability distribution for each voxel)
+  n_classes = K.int_shape(y_pred)[-1]
+  labels = range(1, n_classes)
+  mean = 0
+  for label in labels:
+    # label is the positive label.
 
-    # labels_mask[i, j] stores whether the ground truth patch i contains label j.
-    labels_mask = K.cast(K.any(positive_mask, axis=1), 'float32')
-    # This is an ugly hack for labels_mask[: 0] - 0
-    # labels_mask = labels_mask * K.cast(K.not_equal(labels_mask, 0), 'float32')
+    positive_mask = K.equal(y_true, label)
+    positive_mask = K.cast(positive_mask, 'float')
     negative_mask = 1 - positive_mask
-    # True Positive: sum of correct scores assigned to positive labels
-    tp = K.sum(y_pred * positive_mask, axis=1)
+    # True Positive: sum of correct scores assigned to positive label
+    tp = K.sum(y_pred[..., label:label + 1] * positive_mask)
+    # / (K.sum(positive_mask) + 1e-4)
     # False Positive: sum of positive scores assigned to negative labels
-    fp = K.sum(y_pred * negative_mask, axis=1)
+    fp = K.sum(y_pred[..., label:label + 1] * (negative_mask))
+    # / (K.sum(negative_mask) + 1e-4)
     # False Negative: sum of negative scores assigned to positive label
     # This assumes that the sum of scores is 1 (output from softmax)
-    fn = K.sum((1 - y_pred) * positive_mask, axis=1)
+    fn = K.sum((1 - y_pred[..., label:label + 1]) * positive_mask)
+    # / (K.sum(positive_mask) + 1e-4)
+    num = 2 * tp
+    den = num + fp + fn + 1e-5
+    coef = num / den
 
-    nums = 2 * tp
-    dens = nums + fp + fn  # + 1e-5
-    coefs = (nums / dens) * labels_mask
-
-    means = K.sum(coefs, axis=1) / K.sum(labels_mask, axis=1)  # + 1e-5
-    return K.mean(means)
-
-    # mean = 0
-    # for patch_idx in range(batch_size):
-    #   patch_pred = y_pred[patch_idx]
-    #   patch_true = y_true[patch_idx]
-
-    # for label in range(1, n_labels):
-    #   # label is the positive label.
-    #   positive_mask = K.equal(y_true, label)
-    #   positive_mask = K.cast(positive_mask, 'float')
-    #   negative_mask = 1 - positive_mask
-    #   label_slice = y_pred[..., label:label + 1]
-    #   for patch_idx in range(batch_size):
-    #     # True Positive: sum of correct scores assigned to positive label
-    #     tp = K.sum(label_slice[patch_idx, ...] * positive_mask)
-    #     # / (K.sum(positive_mask) + 1e-4)
-    #     # False Positive: sum of positive scores assigned to negative labels
-    #     fp = K.sum(y_pred[..., label:label + 1] * (negative_mask))
-    #     # / (K.sum(negative_mask) + 1e-4)
-    #     # False Negative: sum of negative scores assigned to positive label
-    #     # This assumes that the sum of scores is 1 (output from softmax)
-    #     fn = K.sum((1 - y_pred[..., label:label + 1]) * positive_mask)
-    #     # / (K.sum(positive_mask) + 1e-4)
-    #     num = 2 * tp
-    #     den = num + fp + fn + 1e-5
-    #     coef = num / den
-
-    #     mean += coef
-    # mean *= 1 / n_labels
-    # return mean
+    mean += coef
+  mean *= 1 / (n_classes - 1)
+  return mean
 
 
-  @staticmethod
-  def selective_dice_loss(y_true, y_pred):
-    """Selective dice loss, same as selective dice coefficient but decreasing."""
-    return 1 - ContinuousMetrics.selective_dice_coef(y_true, y_pred)
+def mean_dice_loss(y_true, y_pred):
+  """Mean dice loss, same as mean dice coefficient but decreasing."""
+  return 1 - mean_dice_coef(y_true, y_pred)
+
+
+def selective_dice_coef(y_true, y_pred):
+  """Metric that computes the averaged one-versus-all dice coefficient over present labels.
+
+  The coefficient between two labelings is computed by averaging the dice coefficient of each
+  label that appears on the ground truth patch (y_true[i, ...]) except background, against the
+  rest.
+
+  Args:
+      y_true (tensor): ground truth segmentation labels, in sparse notation.
+      y_pred (tensor): predicted segmentation scores.
+
+  Returns:
+      tensor: coefficient value
+
+  """
+  y_pred_shape = K.shape(y_pred)
+  print(y_pred_shape)
+
+  n_labels = y_pred_shape[-1]
+  batch_size = y_pred_shape[0]
+  y_true = K.reshape(y_true, (batch_size, -1, 1))
+  y_pred = K.reshape(y_pred, (batch_size, -1, n_labels))[..., 1:]  # Drops bg scores.
+
+  positive_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_labels)[..., 1:]
+
+  # labels_mask[i, j] stores whether the ground truth patch i contains label j.
+  labels_mask = K.cast(K.any(positive_mask, axis=1), 'float32')
+  # This is an ugly hack for labels_mask[: 0] = 0
+  # labels_mask = labels_mask * K.cast(K.not_equal(labels_mask, 0), 'float32')
+  negative_mask = 1 - positive_mask
+  # True Positive: sum of correct scores assigned to positive labels
+  tp = K.sum(y_pred * positive_mask, axis=1)
+  # False Positive: sum of positive scores assigned to negative labels
+  fp = K.sum(y_pred * negative_mask, axis=1)
+  # False Negative: sum of negative scores assigned to positive label
+  # This assumes that the sum of scores is 1 (output from softmax)
+  fn = K.sum((1 - y_pred) * positive_mask, axis=1)
+
+  nums = 2 * tp
+  dens = nums + fp + fn + 1e-5
+  coefs = (nums / dens) * labels_mask
+
+  means = K.sum(coefs, axis=1) / (K.sum(labels_mask, axis=1) + 1e-5)
+  return K.mean(means)
+
+
+def selective_dice_loss(y_true, y_pred):
+  """Compute selective dice loss, same as selective dice coefficient but decreasing."""
+  return 1 - selective_dice_coef(y_true, y_pred)
+
+
+def selective_sparse_categorical_crossentropy(y_true, y_pred):
+  """Compute the selective categorical crossentropy between ground truth labels and predictions.
+
+  Selective means that it ignores the label -1 and computes the crossentropy over the rest.
+
+  Args:
+      y_true (tensor): ground truth segmentation labels, in sparse notation.
+      y_pred (tensor): predicted segmentation scores.
+
+  """
+  n_classes = K.int_shape(y_pred)[-1]
+  y_pred = K.clip(y_pred, K.epsilon(), 1 - K.epsilon())
+  y_pred_log = K.log(y_pred)
+  not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1),n_classes)
+  loss = -K.sum(K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1),n_classes) * y_pred_log)
+  return loss
+
+
+def improved_selective_sparse_categorical_crossentropy(y_true, y_pred):
+  """Compute the selective categorical crossentropy between ground truth labels and predictions.
+
+  Selective means that it ignores the label -1 and computes the crossentropy over the rest.
+  Improved by counting the "false negatives", that is the score of labels present in the ground
+  truth given to voxels that should be ignored.
+  This means that the -1 actually means "I don't know what this voxel label is, but I know that it
+  is not any of the labels from this task". Note that labels from the current task are assumed to
+  be the labels present in the ground truth, so if a label happens to be absent in the ground truth,
+  it won't be considered in this stage.
+
+  Args:
+      y_true (tensor): ground truth segmentation labels, in sparse notation.
+      y_pred (tensor): predicted segmentation scores.
+
+  """
+  y_pred_shape = K.shape(y_pred)
+
+  n_classes = K.int_shape(y_pred)[-1]
+  batch_size = y_pred_shape[0]
+  y_true = K.reshape(y_true, (batch_size, -1, 1))
+  y_pred = K.reshape(y_pred, (batch_size, -1, n_classes))[..., 1:]  # Drops bg scores.
+  y_pred = K.clip(y_pred, K.epsilon(), 1 - K.epsilon())
+  y_pred_log = K.log(y_pred)
+
+
+  positive_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)[..., 1:]
+  good_scores = -K.sum(positive_mask * y_pred_log)
+
+  # labels_mask[i, j] stores whether the ground truth patch i contains label j.
+  labels_mask = K.cast(K.any(positive_mask, axis=1), 'float32')
+  # not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
+  ignore_mask = K.cast(K.equal(y_true, -1), 'float32')
+  ignore_mask = K.repeat_elements(ignore_mask, n_classes - 1, -1)
+  bad_scores = K.sum(-K.sum(ignore_mask * K.log(1 - y_pred), axis=1) * labels_mask)
+
+  # good_scores = K.print_tensor(good_scores, message='good scores = ')
+  # bad_scores = K.print_tensor(bad_scores, message='bad scores = ')
+  loss = (bad_scores + good_scores)
+  return loss
 
 
 ################################################################################
@@ -240,7 +248,7 @@ class ContinuousMetrics:
 
 
 class DiscreteMetrics:
-  """Discrete metrics, implemented with numpy arrays.
+  """Discrete metrics, implemented with tensors.
 
   Cannot be used as training loss. Discrete means it operates on the predicted
   labels, not the predicted scores.
@@ -320,7 +328,6 @@ class DiscreteMetrics:
   @staticmethod
   def mean_dice_loss(n_classes, ignore_background=True):
     """Mean dice loss, same as mean dice coefficient but decreasing."""
-
     def _mean_dice_loss(y_true, y_pred):
       return 1 - DiscreteMetrics.mean_dice_coef(n_classes, ignore_background)(y_true, y_pred)
 
@@ -372,7 +379,6 @@ class NumpyMetrics:
         y_pred (Numpy array): predicted segmentation, categorical notation
 
     """
-
     positive_mask = (y_true != 0)
 
     tp = np.sum(positive_mask * (y_true == y_pred))
@@ -427,7 +433,6 @@ class NumpyMetrics:
   @staticmethod
   def mean_dice_loss(n_classes, ignore_background=True):
     """Mean dice loss, same as mean dice coefficient but decreasing."""
-
     def _mean_dice_loss(y_true, y_pred):
       return 1 - NumpyMetrics.mean_dice_coef(n_classes, ignore_background)(y_true, y_pred)
 
@@ -443,7 +448,7 @@ class FullVolumeValidationCallback(Callback):
   def __init__(self, model, val_generator, metrics_savefile,
                train_generator=None, validate_every_n_epochs=20,
                steps=1):
-    """Callback initialization.
+    """Initialize callback.
 
     Args:
         model (TYPE): Description
@@ -536,7 +541,7 @@ class TrainValTensorBoard(TensorBoard):
     self.val_log_dir = os.path.join(log_dir, 'validation')
 
   def set_model(self, model):
-    """Setup writer for validation metrics."""
+    """Set up writer for validation metrics."""
     self.val_writer = tf.summary.FileWriter(self.val_log_dir)
     super(TrainValTensorBoard, self).set_model(model)
 

@@ -203,11 +203,10 @@ class MultiUNet:
                               loss='sparse_categorical_crossentropy',
                               optimizer='adam',
                               metrics=['accuracy',
-                                       Metrics.ContinuousMetrics.dice_coef,
-                                       Metrics.ContinuousMetrics.mean_dice_coef()])
+                                       Metrics.dice_coef,
+                                       Metrics.mean_dice_coef])
 
       savedir = Tools.get_dataset_savedir(dataset, loss)
-      # savedir = 'checkpoints/unet_%s_%d' % (name, depth)
       if not os.path.exists(savedir):
         os.mkdir(savedir)
       savefile = savedir + "/weights.h5"
@@ -241,7 +240,7 @@ class MultiUNet:
     #                           optimizer='adam',
     #                           metrics=['accuracy',
     #                                    Metrics.continuous.dice_coef,
-    #                                    Metrics.continuous.mean_dice_coef()])
+    #                                    Metrics.continuous.mean_dice_coef)
 
     #   savedir = "weights"
     #   if not os.path.exists(savedir):

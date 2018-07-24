@@ -157,12 +157,12 @@ class Dataset:
     """
     return (self.get_train_generator(patch_shape=patch_shape,
                                      batch_size=batch_size),
-            self.get_val_generator(patch_shape=patch_shape,
+            self.get_val_generator(patch_shape=(128, 128, 128),
                                    max_queue_size=3,
                                    pool_size=5,
                                    pool_refresh_period=20,
                                    transformations=Transformations.CROP,
-                                   batch_size=batch_size))
+                                   batch_size=1))
 
   def get_full_volume_generators(self, patch_multiplicity=1, infinite=True):
     """Get both training generator and validation full volume batch generators.
@@ -656,25 +656,57 @@ class RawMRBrainS18(Dataset):
 
 
 class MultiDataset(NumpyDataset):
-  """Combination of multiple datasets."""
+  """Combination of multiple datasets.
 
-  def __init__(self, datasets):
-    # TODO: balance dataset sizes.
+  Dataset paths are pooled together in equal proportions (paths from the smaller datasets are
+  repeated to match the biggest dataset size.
+  Datasets are expected to have disjoint labels, and label values are increased incrementally.
+  """
+
+  def __init__(self, datasets, val_dataset, ignore_backgrounds=False):
+    """Initialize MultiDataset.
+
+    Args:
+        datasets (list): List of training datasets.
+        val_dataset (Dataset): Validation dataset
+        ignore_backgrounds (bool, optional): if `True`, set backgrounds for all but the last dataset
+            to -1. This can be combined with loss functions that ignore the -1 labels.
+
+    """
     self.datasets = datasets
+    self.val_dataset = val_dataset
+    self.ignore_backgrounds = ignore_backgrounds
     # self.train_paths = [path for dataset in datasets for path in dataset.train_paths]
     # self.val_paths = [path for dataset in datasets for path in dataset.val_paths]
-    self.train_paths = self._aggregate_paths([dataset.train_paths for dataset in datasets])
+    self.train_paths = self._aggregate_paths([dataset.train_paths + dataset.train_paths
+                                              for dataset in datasets])
+    np.random.seed(123)
     np.random.shuffle(self.train_paths)
-    self.val_paths = self._aggregate_paths([dataset.val_paths for dataset in datasets])
+    self.val_paths = val_dataset.train_paths + val_dataset.val_paths
+    np.random.seed(321)
     np.random.shuffle(self.val_paths)
-    self.modalities = list(set.intersection(*[set(dataset.modalities)
-                                              for dataset in datasets]))
+    self.modalities = list(set.intersection(*[set(dataset.modalities) for dataset in datasets]))
     assert(self.modalities), "Given datasets don't have intersecting modalities"
     self.classes = ['background'] + [clss for dataset in datasets for clss in dataset.classes[1:]]
     self.name = '_'.join(dataset.name for dataset in datasets)
 
   def load_path(self, path):
+    """Load a given dataset path.
+
+    This handles autoincrementing the labels between datasets. If `self.ignore_backgrounds`,
+    this is also handled here.
+
+    Args:
+        path (string): path to a dataset element.
+
+    Returns:
+        tuple: (x, y) image, segmentation.
+
+    """
     x, y = super(MultiDataset, self).load_path(path)
+    if path.startswith(self.val_dataset.root_path):
+      x_filtered = Tools.filter_modalities(self.val_dataset.modalities, self.modalities, x)
+      return x_filtered, y
     label_offset = 0
     for dataset in self.datasets:
       # FIXME: this is ugly.
@@ -684,6 +716,8 @@ class MultiDataset(NumpyDataset):
       label_offset += dataset.n_classes - 1
     x_filtered = Tools.filter_modalities(source_dataset.modalities, self.modalities, x)
     y[y > 0] += label_offset
+    if self.ignore_backgrounds and source_dataset is not self.datasets[-1]:
+      y[y == 0] = -1
     return x_filtered, y
 
   @staticmethod
@@ -692,6 +726,7 @@ class MultiDataset(NumpyDataset):
 
     Args:
         paths_list (list of lists): List of lists of paths to be aggregated.
+
     """
     max_len_paths = max(len(paths) for paths in paths_list)
     aggregated_paths = []
