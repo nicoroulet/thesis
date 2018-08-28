@@ -180,7 +180,7 @@ def selective_dice_loss(y_true, y_pred):
   return 1 - selective_dice_coef(y_true, y_pred)
 
 
-def selective_sparse_categorical_crossentropy(y_true, y_pred):
+def old_selective_sparse_categorical_crossentropy(y_true, y_pred):
   """Compute the selective categorical crossentropy between ground truth labels and predictions.
 
   Selective means that it ignores the label -1 and computes the crossentropy over the rest.
@@ -198,7 +198,7 @@ def selective_sparse_categorical_crossentropy(y_true, y_pred):
   return loss
 
 
-def improved_selective_sparse_categorical_crossentropy(y_true, y_pred):
+def selective_sparse_categorical_crossentropy(y_true, y_pred):
   """Compute the selective categorical crossentropy between ground truth labels and predictions.
 
   Selective means that it ignores the label -1 and computes the crossentropy over the rest.
