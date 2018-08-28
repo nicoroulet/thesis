@@ -15,7 +15,7 @@ from BatchGenerator import BatchGenerator, Transformations
 import Tools
 
 
-def normalize(X):
+def normalize(X, roi=None):
   """Normalize a given image.
 
   Args:
@@ -25,8 +25,13 @@ def normalize(X):
       Numpy array: normalized image
 
   """
+  if roi is None:
   # X -= np.mean(X)
-  X /= np.std(X)
+    X /= np.std(X)
+  else:
+    roi = roi.astype('bool')
+    X[roi] -= np.mean(X[roi])
+    X /= np.std(X[roi])
   return X
 
 
@@ -64,6 +69,8 @@ def preprocess_dataset(dataset, root_dir):
   paths = dataset.train_paths + dataset.val_paths
   np.random.shuffle(paths)
 
+  print('Preprocessing dataset %s' % dataset.name)
+  print(paths)
   for i, path in enumerate(paths):
     save_path = root_dir + '/%d' % i
     print('Processing path: %s' % path)
@@ -340,8 +347,11 @@ class MRBrainS18(NumpyDataset):
   name = 'mrbrains18'
 
 
+# -------------------------------- Raw Datasets ----------------------------------------------------
+
+
 class RawATLAS(Dataset):
-  """ Anatomical Tracing of Lesions After Stroke (ATLAS) dataset wrapper.
+  """Anatomical Tracing of Lesions After Stroke (ATLAS) dataset wrapper.
 
   Segmentation labels:
     0 Background
@@ -353,7 +363,9 @@ class RawATLAS(Dataset):
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
-    data = normalize(resample_to_1mm(nib.load(data_path)).get_fdata())
+    data = resample_to_1mm(nib.load(data_path[0])).get_fdata()
+    brainmask = resample_to_1mm(nib.load(data_path[1]), interpolation='nearest').get_fdata()
+    data = normalize(data * brainmask, roi=brainmask)
     data = data.reshape(data.shape + (1,))
 
     seg_paths = self._get_seg_paths(path)
@@ -363,16 +375,15 @@ class RawATLAS(Dataset):
     return (data, seg)
 
   def _get_data_path(self, path):
-    data_path = glob(path + '/*deface_stx_robex*')
-    assert(len(data_path) == 1)  # There should be exactly one deface per dir
-    data_path = data_path[0]
+    data_path = [glob(path + '/*deface_stx_robex*')[0],
+                 glob(path + '/*brainmask*')[0]]
     return data_path
 
   def _get_seg_paths(self, path):
     return glob(path + '/*LesionSmooth*')
 
   def _get_paths(self, root_path):
-    return glob(root_path + '*/*/*')
+    return glob(root_path + 'Site*/*/*')
 
   classes = ['background', 'stroke']
 
@@ -396,9 +407,8 @@ class RawBraTS(Dataset):
 
   def load_path(self, path):
     data_paths = self._get_data_path(path)
-    data = [normalize(resample_to_1mm(nib.load(path)
-                                      ).get_fdata().astype('float32'))
-                                      for path in data_paths]
+    data = [resample_to_1mm(nib.load(path)).get_fdata().astype('float32') for path in data_paths]
+    data = [normalize(datum, roi=(np.abs(datum) > 0.0001)) for datum in data]
     data = np.stack(data, axis=-1)
 
     seg_path = self._get_seg_paths(path)
@@ -452,9 +462,9 @@ class RawMRBrainS13(Dataset):
     flair = resample_to_1mm(nib.load(data_path[2])).get_fdata()
     brainmask = resample_to_1mm(nib.load(data_path[3]), interpolation='nearest').get_fdata()
 
-    data = np.stack([normalize(t1 * brainmask),
-                     normalize(ir * brainmask),
-                     normalize(flair * brainmask)], axis=-1).astype('float32')
+    data = np.stack([normalize(t1 * brainmask, roi=brainmask),
+                     normalize(ir * brainmask, roi=brainmask),
+                     normalize(flair * brainmask, roi=brainmask)], axis=-1).astype('float32')
 
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
@@ -503,13 +513,13 @@ class RawIBSR(Dataset):
     data_path = self._get_data_path(path)
     data = resample_to_1mm(nib.load(data_path[0])).get_fdata().astype('float32')
 
-    data *= resample_to_1mm(nib.load(data_path[1]), interpolation='nearest').get_fdata()
-    data = normalize(data)
+    brainmask = resample_to_1mm(nib.load(data_path[1]), interpolation='nearest').get_fdata()
+    data = normalize(data * brainmask, roi=brainmask)
 
     seg_path = self._get_seg_paths(path)
     assert(len(seg_path) == 1)
     seg_path = seg_path[0]
-    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_data().astype('int8')
+    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_fdata().astype('int8')
     return (data, seg)
 
   def _get_data_path(self, path):
@@ -546,12 +556,13 @@ class RawMRBrainS17(Dataset):
 
   def load_path(self, path):
     data_path = self._get_data_path(path)
-    T1 = resample_to_1mm(nib.load(data_path[1])).get_fdata().astype('float32')
-    FLAIR = resample_to_1mm(nib.load(data_path[2])).get_fdata().astype('float32')
+    t1 = resample_to_1mm(nib.load(data_path[1])).get_fdata().astype('float32')
+    flair = resample_to_1mm(nib.load(data_path[2])).get_fdata().astype('float32')
 
     brainmask = resample_to_1mm(nib.load(data_path[0]), interpolation='nearest').get_fdata()
 
-    data = np.stack([normalize(T1 * brainmask), normalize(FLAIR * brainmask)], axis=-1)
+    data = np.stack([normalize(t1 * brainmask, roi=brainmask),
+                     normalize(flair * brainmask, roi=brainmask)], axis=-1)
 
     seg_path = self._get_seg_path(path)
     seg = nib.load(seg_path)
@@ -596,21 +607,21 @@ class RawMRBrainS18(Dataset):
       -1 Ignore.
   'Ignore' groups Cerebellum, Brain Stem, Infarction and Other.
   """
-  def __init__(self, root_path='../../data/MICCAI18_WMH/',
+  def __init__(self, root_path='../../data/MRBrainS18/',
                validation_portion=.2):
     super(RawMRBrainS18, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
     data_paths = self._get_data_path(path)
-    T1 = resample_to_1mm(nib.load(data_paths[1])).get_fdata().astype('float32')
-    IR = resample_to_1mm(nib.load(data_paths[2])).get_fdata().astype('float32')
-    FLAIR = resample_to_1mm(nib.load(data_paths[3])).get_fdata().astype('float32')
+    t1 = resample_to_1mm(nib.load(data_paths[1])).get_fdata().astype('float32')
+    ir = resample_to_1mm(nib.load(data_paths[2])).get_fdata().astype('float32')
+    flair = resample_to_1mm(nib.load(data_paths[3])).get_fdata().astype('float32')
 
     brainmask = resample_to_1mm(nib.load(data_paths[0]), interpolation='nearest').get_fdata()
 
-    data = np.stack([normalize(T1 * brainmask),
-                     normalize(FLAIR * brainmask),
-                     normalize(IR * brainmask)],
+    data = np.stack([normalize(t1 * brainmask, roi=brainmask),
+                     normalize(flair * brainmask, roi=brainmask),
+                     normalize(ir * brainmask, roi=brainmask)],
                      axis=-1)
 
     seg_path = self._get_seg_path(path)
@@ -636,7 +647,7 @@ class RawMRBrainS18(Dataset):
     return (data, seg)
 
   def _get_data_path(self, path):
-    data_path = [glob(path + '/pre/reg_brainmask2.nii.gz')[0],
+    data_path = [glob(path + '/pre/reg_brainmask.nii.gz')[0],
                  glob(path + '/pre/reg_T1.nii.gz')[0],
                  glob(path + '/pre/reg_IR.nii.gz')[0],
                  glob(path + '/pre/FLAIR.nii.gz')[0]]
@@ -660,10 +671,14 @@ class MultiDataset(NumpyDataset):
 
   Dataset paths are pooled together in equal proportions (paths from the smaller datasets are
   repeated to match the biggest dataset size.
+
   Datasets are expected to have disjoint labels, and label values are increased incrementally.
+
+  Note: both train and validation parts of training datasets are used for training and both train
+  and validation parts of validation dataset are used for validation.
   """
 
-  def __init__(self, datasets, val_dataset, ignore_backgrounds=False):
+  def __init__(self, datasets, val_dataset, ignore_backgrounds=False, balance='datasets'):
     """Initialize MultiDataset.
 
     Args:
@@ -671,15 +686,22 @@ class MultiDataset(NumpyDataset):
         val_dataset (Dataset): Validation dataset
         ignore_backgrounds (bool, optional): if `True`, set backgrounds for all but the last dataset
             to -1. This can be combined with loss functions that ignore the -1 labels.
+        balance: either `datasets` (default) or `labels`. `datasets` means `self.train_paths`
+            will have equal number of paths from each dataset. `labels` means the number of paths
+            from each dataset will be balanced according to the number of labels of the
+            corresponding dataset (more labels, more paths of that dataset). This means
+            patches will be sampled equiprobably between labels instead of datasets.
 
     """
     self.datasets = datasets
     self.val_dataset = val_dataset
     self.ignore_backgrounds = ignore_backgrounds
+    self.balance = balance
     # self.train_paths = [path for dataset in datasets for path in dataset.train_paths]
     # self.val_paths = [path for dataset in datasets for path in dataset.val_paths]
-    self.train_paths = self._aggregate_paths([dataset.train_paths + dataset.train_paths
-                                              for dataset in datasets])
+    self.train_paths = self._aggregate_paths()
+    #                                        [dataset.train_paths + dataset.val_paths
+    #                                           for dataset in datasets])
     np.random.seed(123)
     np.random.shuffle(self.train_paths)
     self.val_paths = val_dataset.train_paths + val_dataset.val_paths
@@ -689,6 +711,8 @@ class MultiDataset(NumpyDataset):
     assert(self.modalities), "Given datasets don't have intersecting modalities"
     self.classes = ['background'] + [clss for dataset in datasets for clss in dataset.classes[1:]]
     self.name = '_'.join(dataset.name for dataset in datasets)
+    # if balance != 'datasets':
+    #   self.name += '_' + balance
 
   def load_path(self, path):
     """Load a given dataset path.
@@ -720,25 +744,36 @@ class MultiDataset(NumpyDataset):
       y[y == 0] = -1
     return x_filtered, y
 
-  @staticmethod
-  def _aggregate_paths(paths_list):
+  def _aggregate_paths(self):
     """Combine paths with balanced amounts from each list of paths.
 
     Args:
         paths_list (list of lists): List of lists of paths to be aggregated.
 
     """
-    max_len_paths = max(len(paths) for paths in paths_list)
     aggregated_paths = []
-    for paths in paths_list:
-      aggregated_paths.extend(itertools.islice(itertools.cycle(paths), max_len_paths))
+    if self.balance == 'datasets':
+      max_n_images = max(dataset.n_images for dataset in self.datasets)
+      for dataset in self.datasets:
+        paths = dataset.train_paths + dataset.val_paths
+        aggregated_paths.extend(itertools.islice(itertools.cycle(paths), max_n_images))
+    elif self.balance == 'labels':
+      # Dataset with highest images / n_classes ratio
+      max_idx = np.argmax([dataset.n_images / dataset.n_classes for dataset in self.datasets])
+      max_dataset = self.datasets[max_idx]
+      for dataset in self.datasets:
+        n_paths = (max_dataset.n_images * dataset.n_classes) // max_dataset.n_classes
+        aggregated_paths.extend(itertools.islice(itertools.cycle(dataset.train_paths +
+                                                                dataset.val_paths), n_paths))
+    else:
+      raise ValueError("balance attribute must be either 'datasets' or 'labels'")
     return aggregated_paths
 
 
 if __name__ == '__main__':
-  preprocess_dataset(RawMRBrainS13(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawMRBrainS13(), '../../data/preprocessed_datasets/')
   # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/')
   # preprocess_dataset(RawBraTS(), '../../data/preprocessed_datasets/')
   # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/')
   # preprocess_dataset(RawMRBrainS17(), '../../data/preprocessed_datasets/')
-  # preprocess_dataset(RawMRBrainS18(), '../../data/preprocessed_datasets/')
+  preprocess_dataset(RawMRBrainS18(), '../../data/preprocessed_datasets/')
