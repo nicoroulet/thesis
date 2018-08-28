@@ -11,6 +11,7 @@ import functools
 
 # import tensorflow as tf
 
+import keras
 from keras.layers import Input, Conv3D, Conv3DTranspose, MaxPooling3D, \
                          Add, Dropout, BatchNormalization
 from keras.models import Model
@@ -54,8 +55,8 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
                           # as suggested by paper.
       'activation': 'relu',
       # TODO: experiment with regularizers and initializers.
-      'kernel_initializer': 'he_normal'
-      # 'kernel_regularizer': keras.regularizers.l2(.0001)
+      'kernel_initializer': 'he_normal',
+      'kernel_regularizer': keras.regularizers.l2(.001)
   }
 
   inputs = Input((None, None, None, n_channels))
@@ -69,6 +70,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
 
   # Convolution layers
   for layer in range(depth - 1):
+    x = Dropout(.2)(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
     x = BatchNormalization()(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
@@ -85,6 +87,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
   # Transposed Convolution layers (up-convolution)
   for layer in reversed(range(depth - 1)):
     n_filters //= 2
+    x = Dropout(.2)(x)
     x = Conv3DTranspose(filters=n_filters, kernel_size=(2, 2, 2),
                         strides=(2, 2, 2))(x)
     x = Add()([x, layer_outputs.pop()])
@@ -209,13 +212,17 @@ class MultiUNet:
       savedir = Tools.get_dataset_savedir(dataset, loss)
       if not os.path.exists(savedir):
         os.mkdir(savedir)
-      savefile = savedir + "/weights.h5"
+      savefile = savedir + "/best_weights.h5"
+      secondary_savefile = savedir + "/weights.h5"
       self.savefiles[name] = savefile
       if os.path.exists(savefile):
         print('loading weights from', savefile)
         self.nets[name].load_weights(savefile)
+      elif os.path.exists(secondary_savefile):
+        print('loading weights from', secondary_savefile)
+        self.nets[name].load_weights(secondary_savefile)
       else:
-        print('WARNING: weights file not found.')
+        print('WARNING: weights file not found at %s.' % savefile)
       # TODO: add epoch count, metrics, tensorboard.
 
       model_checkpoint = ModelCheckpoint(savefile,
