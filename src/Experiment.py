@@ -27,9 +27,15 @@ mrbrains18 = Datasets.MRBrainS18(validation_portion=1)
 mrbrains17_ibsr = Datasets.MultiDataset([mrbrains17, ibsr], mrbrains18)
 mrbrains17_ibsr_ignore_bg = Datasets.MultiDataset([mrbrains17, ibsr], mrbrains18,
                                                   ignore_backgrounds=True)
+mrbrains17_ibsr_balance_labels = Datasets.MultiDataset([mrbrains17, ibsr], mrbrains18,
+                                                       balance='labels')
+mrbrains17_ibsr_ignore_bg_balance_labels = Datasets.MultiDataset([mrbrains17, ibsr], mrbrains18,
+                                                ignore_backgrounds=True, balance='labels')
+
 mrbrains17_13 = Datasets.MultiDataset([mrbrains17, mrbrains13], mrbrains18)
 mrbrains17_13_ignore_bg = Datasets.MultiDataset([mrbrains17, mrbrains13], mrbrains18,
                                                 ignore_backgrounds=True)
+
 
 tumor_tasks = [
          {"name": "tumor",
@@ -53,12 +59,24 @@ wmh_tasks = [
                      "Gray matter"]}
         ]
 
+def load_weights(model, primary_file, secondary_file=None):
+  """Load model weights from primary_file if it exists, otherwise try with secondary_file."""
+  if os.path.exists(primary_file):
+    print("Loading weights from %s..." % primary_file)
+    model.load_weights(primary_file)
+  elif secondary_file is not None and os.path.exists(secondary_file):
+    print("Loading weights from %s..." % secondary_file)
+    model.load_weights(secondary_file)
+  else:
+    print('WARNING: no weights found. Initializing a new net at %s.' % primary_file)
+
 
 def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
                patch_shape=(32, 32, 32), net_depth=4, loss=None):
   """Build UNet, load the weights (if any), train, save weights."""
   savedir = Tools.get_dataset_savedir(dataset, loss)
   weights_file = '%s/weights.h5' % savedir
+  best_weights_file = '%s/best_weights.h5' % savedir
   epoch_file = '%s/last_epoch.txt' % savedir
   metrics_file = '%s/metrics.csv' % savedir
   full_volume_metrics_file = '%s/full_volume_metrics' % savedir
@@ -97,17 +115,16 @@ def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
 
   print(model.summary(line_length=150, positions=[.25, .55, .67, 1.]))
 
-  if os.path.exists(weights_file):
-    model.load_weights(weights_file)
-  else:
-    print('WARNING: no weights found. Initializing a new net.')
+  load_weights(model, weights_file)
 
   if not os.path.exists(savedir):
     os.makedirs(savedir)
   model_checkpoint = ModelCheckpoint(weights_file,
                                      monitor='val_loss',
                                      save_best_only=False)
-  # model_checkpoint = Callback()
+  best_model_checkpoint = ModelCheckpoint(best_weights_file,
+                                     monitor='val_loss',
+                                     save_best_only=True)
 
   for file in glob.glob('tensorboard/*'):
     os.remove(file)
@@ -130,6 +147,7 @@ def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
                           validation_data=patch_val_gen,
                           validation_steps=10,
                           callbacks=[model_checkpoint,
+                                     best_model_checkpoint,
                                      tensorboard,
                                      # lr_sched,
                                     #  full_volume_validation
@@ -169,7 +187,8 @@ def validate_unet(train_dataset, val_dataset=None, net_depth=4, val_steps=100, l
                         n_channels=train_dataset.n_modalities)
 
   loaddir = Tools.get_dataset_savedir(train_dataset, loss)
-  weights_file = '%s/weights.h5' % loaddir
+  weights_file = '%s/best_weights.h5' % loaddir
+  secondary_weights_file = '%s/weights.h5' % loaddir
 
   if loss is None:
     loss = 'sparse_categorical_crossentropy'
@@ -187,9 +206,7 @@ def validate_unet(train_dataset, val_dataset=None, net_depth=4, val_steps=100, l
                                             val_dataset.modalities,
                                             train_dataset.modalities)
 
-  # if os.path.exists(weights_file):
-  print('Loading weights from %s...' % weights_file)
-  model.load_weights(weights_file)
+  load_weights(model, weights_file, secondary_weights_file)
 
   metrics = []
 
@@ -217,6 +234,7 @@ def validate_unet(train_dataset, val_dataset=None, net_depth=4, val_steps=100, l
   metrics_file = '%s/validation_metrics' % loaddir
   if val_dataset is not train_dataset:
     metrics_file += '_' + val_dataset.name
+  print('Saving validation metrics to', metrics_file)
   np.save(metrics_file, np.array(gen_metrics))
 
 
@@ -236,15 +254,15 @@ def visualize_unet(train_dataset, val_dataset=None, net_depth=4, loss=None):
                       n_channels=train_dataset.n_modalities)
 
   savedir = Tools.get_dataset_savedir(train_dataset, loss)
-  weights_file = '%s/weights.h5' % savedir
+  weights_file = '%s/best_weights.h5' % savedir
+  secondary_weights_file = '%s/weights.h5' % savedir
 
   if loss is None:
     loss = 'sparse_categorical_crossentropy'
 
   model.compile(loss=loss, optimizer='sgd')
 
-  print('Loading weights from %s...' % weights_file)
-  model.load_weights(weights_file)
+  load_weights(model, weights_file, secondary_weights_file)
 
   x, y = next(generator)
   while (np.sum(y) < 500):
@@ -281,7 +299,7 @@ def train_multiunet(epochs=1, steps_per_epoch=20, batch_size=3,
 
 
 def validate_multiunet(multiunet_datasets, val_dataset, net_depth=4, loss=None):
-  """Run MultiUNet full volume CPU validation on a combine dataset (containing all labels)."""
+  """Run MultiUNet full volume CPU validation on a combined dataset (containing all labels)."""
   import numpy as np
   import tensorflow as tf
   # import matplotlib.pyplot as plt
@@ -307,9 +325,6 @@ def validate_multiunet(multiunet_datasets, val_dataset, net_depth=4, loss=None):
     y_true[ignore_mask] = 0
     y_pred[ignore_mask] = 0
 
-    # import pdb
-    # pdb.set_trace()
-
     metric = MetricsMonitor.MetricsMonitor.getMetricsForWholeSegmentation(y_true, y_pred,
                                                           labels=range(1, model.n_classes))[0]
     print(metric)
@@ -318,7 +333,10 @@ def validate_multiunet(multiunet_datasets, val_dataset, net_depth=4, loss=None):
   print(np.mean(metrics, axis=0))
 
   savedir = Tools.get_dataset_savedir(val_dataset, loss)
+  if not os.path.exists(savedir):
+    os.makedirs(savedir)
   metrics_file = '%s/validation_metrics' % savedir
+  print('Saving validation metrics to', metrics_file)
   np.save(metrics_file, np.array(metrics))
 
 
@@ -354,9 +372,11 @@ def visualize_multiunet():
 
 
 if __name__ == '__main__':
-  # --------------------------------- MRBrainS13 ---------------------------------------------------
+  Tools.set_model_subdir('balanced_datasets_metrics')
+
+  "--------------------------------- MRBrainS13 ---------------------------------------------------"
   # train_unet(mrbrains13, epochs=50)
-  # train_unet(mrbrains13, epochs=30, loss=Metrics.Wmean_dice_loss)
+  # train_unet(mrbrains13, epochs=30, loss=Metrics.mean_dice_loss)
 
   # validate_unet(mrbrains13)
   # validate_unet(mrbrains13, loss=Metrics.dice_loss)
@@ -364,31 +384,30 @@ if __name__ == '__main__':
 
   # visualize_unet(mrbrains13)
 
-  # --------------------------------- IBSR ---------------------------------------------------------
-  # train_unet(ibsr, epochs=100)
-  # train_unet(ibsr, epochs=100, loss=Metrics.dice_loss)
+  "--------------------------------- IBSR ---------------------------------------------------------"
+  # train_unet(ibsr, epochs=50)
+  # train_unet(ibsr, epochs=100, loss=Metrics.selective_dice_loss)
   # train_unet(ibsr, epochs=50, loss=Metrics.mean_dice_loss)
 
   # validate_unet(ibsr)
-  # validate_unet(ibsr, loss=Metrics.dice_loss)
+  # validate_unet(ibsr, loss=Metrics.selective_dice_loss)
   # validate_unet(ibsr, loss=Metrics.mean_dice_loss)
   # validate_unet(ibsr, mrbrains13_val)
 
   # visualize_unet(ibsr)
 
-  # ---------------------------------- BraTS -------------------------------------------------------
+  "---------------------------------- BraTS -------------------------------------------------------"
   # train_unet(brats, epochs=1, steps_per_epoch=5000, batch_size=2)
   # validate_unet(brats, val_steps=10)
   # visualize_unet(brats)
 
-  # ---------------------------------- ATLAS -------------------------------------------------------
+  "---------------------------------- ATLAS -------------------------------------------------------"
   # train_unet(atlas, epochs=4, steps_per_epoch=10000, batch_size=10)
   # validate_unet(atlas, val_steps=10)
   # visualize_unet(atlas)
 
-  # --------------------------------- MRBrainS17 ---------------------------------------------------
-  # train_unet(mrbrains17, epochs=100)
-  # train_unet(mrbrains17, epochs=100, loss=Metrics.dice_loss)
+  "--------------------------------- MRBrainS17 ---------------------------------------------------"
+  # train_unet(mrbrains17, epochs=50)
   # train_unet(mrbrains17, epochs=50, loss=Metrics.mean_dice_loss)
 
   # validate_unet(mrbrains17)
@@ -397,54 +416,58 @@ if __name__ == '__main__':
 
   # visualize_unet(mrbrains17)
 
-  # --------------------------------- MRBrainS17_IBSR ----------------------------------------------
-  # train_unet(mrbrains17_ibsr, epochs=50)
-  # train_unet(mrbrains17_ibsr, epochs=50, loss=Metrics.dice_loss)
-  # train_unet(mrbrains17_ibsr, epochs=50, loss=Metrics.mean_dice_loss)
-  # train_unet(mrbrains17_ibsr, epochs=200, loss=Metrics.selective_dice_loss)
-  # train_unet(mrbrains17_ibsr_ignore_bg, epochs=50,
+  "--------------------------------- MRBrainS17_IBSR ----------------------------------------------"
+  Tools.set_model_subdir('regularization_metrics')
+  # train_unet(mrbrains17_ibsr, epochs=20)
+  # train_unet(mrbrains17_ibsr, epochs=200, loss=Metrics.mean_dice_loss)
+  # train_unet(mrbrains17_ibsr, epochs=100, loss=Metrics.selective_dice_loss)
+  # train_unet(mrbrains17_ibsr_ignore_bg, epochs=200,
   #            loss=Metrics.selective_sparse_categorical_crossentropy)
-  train_unet(mrbrains17_ibsr_ignore_bg, epochs=100,
-             loss=Metrics.improved_selective_sparse_categorical_crossentropy)
 
-
-  # validate_unet(mrbrains17_ibsr)
   # validate_unet(mrbrains17_ibsr, mrbrains18)
-  # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.dice_loss)
   # validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.mean_dice_loss)
   validate_unet(mrbrains17_ibsr, mrbrains18, loss=Metrics.selective_dice_loss)
-  validate_unet(mrbrains17_ibsr_ignore_bg, mrbrains18,
-                loss=Metrics.selective_sparse_categorical_crossentropy)
-  validate_unet(mrbrains17_ibsr_ignore_bg, mrbrains18,
-                loss=Metrics.improved_selective_sparse_categorical_crossentropy)
+  # validate_unet(mrbrains17_ibsr_ignore_bg, mrbrains18,
+  #               loss=Metrics.selective_sparse_categorical_crossentropy)
 
-  # visualize_unet(mrbrains17_ibsr, loss=Metrics.dice_loss)
-  # visualize_unet(mrbrains17_ibsr, mrbrains18)
+  # visualize_unet(mrbrains17_ibsr_balance_labels, mrbrains13)
+  # visualize_unet(mrbrains17_ibsr_balance_labels, mrbrains13, loss=Metrics.mean_dice_loss)
 
-  # ---------------------------------- MRBrainS17_13 -----------------------------------------------
-  # print(mrbrains17_13.train_paths)
-  # train_unet(mrbrains17_13, epochs=50)
-  # train_unet(mrbrains17_13, epochs=50, loss=Metrics.dice_loss)
-  # train_unet(mrbrains17_13, epochs=50, loss=Metrics.mean_dice_loss)
-  train_unet(mrbrains17_13, epochs=100, loss=Metrics.selective_dice_loss)
-  # train_unet(mrbrains17_13_ignore_bg, epochs=100,
+  "Balance labels"
+  Tools.set_model_subdir('balanced_labels_metrics')
+  # train_unet(mrbrains17_ibsr_balance_labels, epochs=200)
+  # train_unet(mrbrains17_ibsr_balance_labels, epochs=200, loss=Metrics.mean_dice_loss)
+  # train_unet(mrbrains17_ibsr_balance_labels, epochs=200, loss=Metrics.selective_dice_loss)
+  # train_unet(mrbrains17_ibsr_ignore_bg_balance_labels, epochs=200,
   #            loss=Metrics.selective_sparse_categorical_crossentropy)
-  train_unet(mrbrains17_13_ignore_bg, epochs=100,
-             loss=Metrics.improved_selective_sparse_categorical_crossentropy)
+
+  # validate_unet(mrbrains17_ibsr_balance_labels, mrbrains18)
+  # validate_unet(mrbrains17_ibsr_balance_labels, mrbrains18, loss=Metrics.mean_dice_loss)
+  # validate_unet(mrbrains17_ibsr_balance_labels, mrbrains18, loss=Metrics.selective_dice_loss)
+  # validate_unet(mrbrains17_ibsr_ignore_bg_balance_labels, mrbrains18,
+  #               loss=Metrics.selective_sparse_categorical_crossentropy)
+
+  # visualize_unet(mrbrains17_ibsr_balance_labels, mrbrains13)
+  # visualize_unet(mrbrains17_ibsr_balance_labels, mrbrains13, loss=Metrics.selective_dice_loss)
+  Tools.set_model_subdir('balanced_datasets_metrics')
+
+  "---------------------------------- MRBrainS17_13 -----------------------------------------------"
+  # train_unet(mrbrains17_13, epochs=200)
+  # train_unet(mrbrains17_13, epochs=200, loss=Metrics.mean_dice_loss)
+  # train_unet(mrbrains17_13, epochs=200, loss=Metrics.selective_dice_loss)
+  # train_unet(mrbrains17_13_ignore_bg, epochs=200,
+  #            loss=Metrics.selective_sparse_categorical_crossentropy)
 
   # validate_unet(mrbrains17_13, mrbrains18)
-  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.dice_loss)
   # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.mean_dice_loss)
-  validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.selective_dice_loss)
+  # validate_unet(mrbrains17_13, mrbrains18, loss=Metrics.selective_dice_loss)
   # validate_unet(mrbrains17_13_ignore_bg, mrbrains18,
   #               loss=Metrics.selective_sparse_categorical_crossentropy)
-  validate_unet(mrbrains17_13_ignore_bg, mrbrains18,
-                loss=Metrics.improved_selective_sparse_categorical_crossentropy)
 
-  # visualize_unet(mrbrains17_13, mrbrains18, loss=Metrics.mean_dice_loss)
+  # visualize_unet(mrbrains17_13, mrbrains18, loss=Metrics.selective_dice_loss)
   # visualize_unet(mrbrains17_13, mrbrains18)
 
-  # ---------------------------------- MultiUNet ---------------------------------------------------
+  "---------------------------------- MultiUNet ---------------------------------------------------"
   # validate_multiunet([mrbrains17, ibsr], mrbrains18)
   # validate_multiunet([mrbrains17, mrbrains13], mrbrains18)
 

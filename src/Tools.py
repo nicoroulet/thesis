@@ -104,17 +104,22 @@ def filter_modalities(all_modalities, target_modalities, x):
 
   return x[..., target_indexes]
 
+_model_subdir = ''
+
+def set_model_subdir(subdir):
+  global _model_subdir
+  _model_subdir = subdir
 
 def get_dataset_savedir(dataset, loss=None):
   """Figure out savedir from a given dataset and loss function.
 
   Args:
-      dataset (Dataset): the Dataset
+      dataset (Dataset): the Dataset.
       loss (string or function, optional): Dataset loss. Default is
-          `sparse_categorical_crossentropy`
+          `sparse_categorical_crossentropy`.
 
   """
-  savedir = '../models/unet_%s' % (dataset.name)
+  savedir = '../models/%s/unet_%s' % (_model_subdir, dataset.name)
   if loss is not None and loss != 'sparse_categorical_crossentropy':
     savedir += '_' + (loss if isinstance(loss, str) else loss.__name__)
   return savedir
