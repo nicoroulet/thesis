@@ -217,8 +217,47 @@ def selective_sparse_categorical_crossentropy(y_true, y_pred):
   n_classes = K.int_shape(y_pred)[-1]
   y_pred = K.clip(y_pred, K.epsilon(), 1 - K.epsilon())
   y_pred_log = K.log(y_pred)
-  not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1),n_classes)
+  not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
   crossentropy = -K.mean(not_ignore_mask * y_pred_log)
+
+  batch_size = K.shape(y_pred)[0]
+  y_true = K.reshape(y_true, (batch_size, -1, 1))
+  y_pred = K.reshape(y_pred, (batch_size, -1, n_classes))[..., 1:]  # Drops bg scores.
+  positive_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)[..., 1:]
+  # labels_mask[i, j] stores whether the ground truth patch i contains label j.
+  labels_mask = K.cast(K.any(positive_mask, axis=1), 'float32')
+  # not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
+  ignore_mask = K.cast(K.equal(y_true, -1), 'float32')
+  ignore_mask = K.repeat_elements(ignore_mask, n_classes - 1, -1)
+  ignored_fp = K.mean(-K.mean(ignore_mask * K.log(1 - y_pred), axis=1) * labels_mask)
+
+  # good_scores = K.print_tensor(good_scores, message='good scores = ')
+  # bad_scores = K.print_tensor(bad_scores, message='bad scores = ')
+  loss = (crossentropy + ignored_fp)
+  return loss
+
+
+def bg_selective_sparse_categorical_crossentropy(y_true, y_pred):
+  """Compute the selective categorical crossentropy between ground truth labels and predictions.
+
+  Selective means that it ignores the label 0 and computes the crossentropy over the rest.
+  Improved by counting the "false negatives", that is the score of labels present in the ground
+  truth given to voxels that should be ignored.
+  This means that the 0 actually means "I don't know what this voxel label is, but I know that it
+  is not any of the labels from this task". Note that labels from the current task are assumed to
+  be the labels present in the ground truth, so if a label happens to be absent in the ground truth,
+  it won't be considered in this stage.
+
+  Args:
+      y_true (tensor): ground truth segmentation labels, in sparse notation.
+      y_pred (tensor): predicted segmentation scores.
+
+  """
+  n_classes = K.int_shape(y_pred)[-1]
+  y_pred = K.clip(y_pred, K.epsilon(), 1 - K.epsilon())
+  y_pred_log = K.log(y_pred)
+  not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
+  crossentropy = -K.mean(not_ignore_mask[..., 1:] * y_pred_log[..., 1:])
 
   batch_size = K.shape(y_pred)[0]
   y_true = K.reshape(y_true, (batch_size, -1, 1))
