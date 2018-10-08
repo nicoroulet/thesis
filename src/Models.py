@@ -4,6 +4,7 @@ import os
 
 import Metrics
 import Tools
+import Logger
 
 import numpy as np
 import fractions
@@ -56,7 +57,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
       'activation': 'relu',
       # TODO: experiment with regularizers and initializers.
       'kernel_initializer': 'he_normal',
-      'kernel_regularizer': keras.regularizers.l2(.001)
+      'kernel_regularizer': keras.regularizers.l2(.0001)
   }
 
   inputs = Input((None, None, None, n_channels))
@@ -70,7 +71,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
 
   # Convolution layers
   for layer in range(depth - 1):
-    x = Dropout(.2)(x)
+    # x = Dropout(.1)(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
     x = BatchNormalization()(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
@@ -87,7 +88,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
   # Transposed Convolution layers (up-convolution)
   for layer in reversed(range(depth - 1)):
     n_filters //= 2
-    x = Dropout(.2)(x)
+    # x = Dropout(.1)(x)
     x = Conv3DTranspose(filters=n_filters, kernel_size=(2, 2, 2),
                         strides=(2, 2, 2))(x)
     x = Add()([x, layer_outputs.pop()])
@@ -194,6 +195,9 @@ class MultiUNet:
         ]
     """
     # TODO: manage passing different losses to each dataset.
+    Logger.info('Building MultiUNet from datasets:', *(d.name for d in datasets))
+    Logger.debug('Segmentation labels:', *('%d - %s,' % (i + 1, label) for (i, label) in enumerate(
+                                                       l for d in datasets for l in d.classes[1:])))
     self.datasets = datasets
     self.nets = {}
     self.savefiles = {}
@@ -214,16 +218,17 @@ class MultiUNet:
         os.mkdir(savedir)
       savefile = savedir + "/best_weights.h5"
       secondary_savefile = savedir + "/weights.h5"
-      self.savefiles[name] = savefile
       if os.path.exists(savefile):
-        print('loading weights from', savefile)
-        self.nets[name].load_weights(savefile)
+        self.savefiles[name] = savefile
       elif os.path.exists(secondary_savefile):
-        print('loading weights from', secondary_savefile)
-        self.nets[name].load_weights(secondary_savefile)
+        self.savefiles[name] = secondary_savefile
       else:
-        print('WARNING: weights file not found at %s.' % savefile)
+        Logger.warning('WARNING: weights file not found at %s nor %s.' % (savefile,
+                                                                          secondary_savefile))
       # TODO: add epoch count, metrics, tensorboard.
+      if name in self.savefiles:
+        Logger.info('Loading weights for dataset', name, 'from', self.savefiles[name])
+        self.nets[name].load_weights(self.savefiles[name])
 
       model_checkpoint = ModelCheckpoint(savefile,
                                          monitor='val_loss',
@@ -265,7 +270,7 @@ class MultiUNet:
 
   def fit_generator(self, task_name, *args, **kwargs):
     """Call the fit_generator corresponding to task_name."""
-    print("Fitting task: %s..." % task_name)
+    Logger.info("Fitting task: %s..." % task_name)
     kwargs['callbacks'] = (kwargs.get('callbacks', []) + self.callbacks[task_name])
     return self.nets[task_name].fit_generator(*args, **kwargs)
 
@@ -286,6 +291,7 @@ class MultiUNet:
     merge = np.zeros_like(next(iter(y_per_task.values())))
     label_offset = 0
     for dataset in self.datasets:
+      Logger.debug("Multiunet: applying predictions on", dataset.name)
       Y = y_per_task[dataset.name]
       merge += (Y + (Y != 0) * (label_offset)) * (merge == 0)
       label_offset += self.nets[dataset.name].n_classes - 1
@@ -329,7 +335,7 @@ class MultiUNet:
         x_filtered = Tools.filter_modalities(modalities, dataset.modalities, x)
       else:
         x_filtered = x
-      print('predicting x.shape = ', x_filtered.shape)
+      Logger.debug('predicting x with shape = ', x_filtered.shape)
       predictions[dataset.name] = np.argmax(self.nets[dataset.name].predict(x_filtered), axis=-1)
     return self.merge_segmentations(predictions)
 
