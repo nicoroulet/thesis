@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as anim
 
+import Logger
+
 
 def write_gif(img3d, filename, fps=24):
   """ Write the image to the given paths as a GIF, one frame per layer. """
@@ -53,18 +55,32 @@ class TimelinePool:
       self.timelines[new_label] = self.timelines.pop(label)
 
 
-def visualize_predictions(x, y_true, y_pred):
-  print(y_true.shape, y_pred.shape)
+def visualize_predictions(x, y_true, y_pred, savefile=''):
+  Logger.debug('Visualizing predictions')
   assert(y_true.shape == y_pred.shape)
 
+  if savefile:
+    import nibabel as nib
+    Logger.debug("Shapes: prediction -", y_pred.shape, "ground truth -", y_true.shape, "image -", x.shape)
+    Logger.info("Saving ground truth to", savefile + '_truth.nii.gz')
+    nib.save(nib.Nifti1Image(y_true, np.eye(4)), savefile + '_truth.nii.gz')
+    Logger.info("Saving prediction to", savefile + '_pred.nii.gz')
+    nib.save(nib.Nifti1Image(y_pred.astype('int8'), np.eye(4)), savefile + '_pred.nii.gz')
+    Logger.info("Saving image to", savefile + '_img.nii.gz')
+    nib.save(nib.Nifti1Image(x, np.eye(4)), savefile + '_img.nii.gz')
+
+  minl = int(min(np.min(y_true), np.min(y_pred)))
+  maxl = int(max(np.max(y_true), np.max(y_pred)))
   ax = plt.subplot(121)
-  ax.hist(y_true.flat)
-  ax.set_yscale('log')
+  ax.hist(y_true.flat, bins=maxl - minl + 1, range=(minl, maxl), rwidth=0.8)
+  # ax.set_yscale('log')
   ax.set_title('Ground truth hist')
+  ax.set_ylim(ymin=0.1)
   ax = plt.subplot(122)
-  ax.hist(y_pred.flat)
-  ax.set_yscale('log')
-  ax.set_title('Ground truth hist')
+  ax.hist(y_pred.flat, bins=maxl - minl + 1, range=(minl, maxl), rwidth=0.8)
+  # ax.set_yscale('log')
+  ax.set_title('Predictions hist')
+  ax.set_ylim(ymin=0.1)
   plt.show()
 
   x /= np.max(x)
