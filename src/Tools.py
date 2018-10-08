@@ -104,6 +104,8 @@ def filter_modalities(all_modalities, target_modalities, x):
 
   return x[..., target_indexes]
 
+bg_value = -4
+
 _model_subdir = ''
 
 def set_model_subdir(subdir):

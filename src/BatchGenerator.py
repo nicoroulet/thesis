@@ -138,7 +138,7 @@ class BatchGenerator:
       xyz2 = xyz1 + whd_cropped
       x1, y1, z1 = xyz1
       x2, y2, z2 = xyz2
-      print(x1, x2, y1, y2, z1, z2)
+      # print(x1, x2, y1, y2, z1, z2)
       return (X[x1:x2, y1:y2, z1:z2, :],
               Y[x1:x2, y1:y2, z1:z2, :])
     return X, Y
@@ -186,19 +186,19 @@ class BatchGenerator:
     Returns:
         tuple: xmin, xmax, ymin, ymax, zmin, zmax; 3D bounding box
     """
-
     try:
       X = np.squeeze(X, axis=0)
     except ValueError:
       pass  # axis 0 is not single-dimensional
     # Clear possible interpolation artifacts around actual brain.
-    X = X * np.abs(X) > 0.0001
+    mask = X != Tools.bg_value
+    # X = X * np.abs(X) > 0.0001
     out = []
     for ax in ((1, 2), (0, 2), (0, 1)):
-      collapsed_X = np.any(X, axis=ax)
+      collapsed_mask = np.any(mask, axis=ax)
 
-      vmin, vmax = np.where(collapsed_X)[0][[0, -1]]
-      max_size = collapsed_X.shape[0]
+      vmin, vmax = np.where(collapsed_mask)[0][[0, -1]]
+      max_size = collapsed_mask.shape[0]
       size = vmax - vmin
       # FIXME: if size % patch_multiplicity == 0, this adds innecesary size.
       new_size = size + (self.patch_multiplicity -
