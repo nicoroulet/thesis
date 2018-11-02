@@ -2,30 +2,78 @@
 
 import numpy as np
 import random
+import os
+
+def get_label_index(Y, bbox):
+  x1, x2, y1, y2, z1, z2 = bbox
+  Y_cropped = Y[x1:x2, y1:y2, z1:z2]
+  labels = range(int(np.max(Y_cropped)) + 1)
+  label_index = {}
+  for label in labels:
+    label_index[label] = np.argwhere(Y_cropped == label)
+  return label_index
 
 
-def get_voxel_of_rand_label(Y, sub_volume):
+def get_voxel_of_rand_label(Y, bbox, label_index, ignore_bg=False):
   """Random voxel from the given index, with balanced label probabilities.
 
   Args:
       Y (Numpy array): Image from which to pick the voxel.
-      sub_volume (tuple): box x1, x2, y1, y2, z1, z2 from which to
+      bbox (tuple): bounding box x1, x2, y1, y2, z1, z2 from which to
           sample the voxel.
 
   Returns:
       Numpy array: coordinates of the chosen voxel.
 
   """
-  labels = range(int(np.max(Y)) + 1)
+  labels = range(ignore_bg, int(np.max(Y)) + 1)
+  x1, x2, y1, y2, z1, z2 = bbox
+  Y_cropped = Y[x1:x2, y1:y2, z1:z2]
   while (True):
     label = np.random.choice(labels)
-    x1, x2, y1, y2, z1, z2 = sub_volume
-    Y_cropped = Y[x1:x2, y1:y2, z1:z2]
     try:
-      voxel = random.choice(np.argwhere(Y_cropped == label))[:-1]
-      return voxel + [x1, y1, z1]
+      voxel = random.choice(label_index[label])[:-1]
+      return voxel + np.array([x1, y1, z1])
     except IndexError:
       pass
+
+
+def get_bounding_box(X, patch_multiplicity):
+  """Get the bounding box of an image.
+
+  The bounding box is the smallest box that contains all nonzero elements of
+  the volume. The multiplicity defined by the generator is enforced by
+  enlarging the box if needed.
+
+  Args:
+    X (numpy array): image volume from which to calculate the box
+    patch_multiplicity (int): multiplicity enforced to dimensions of bounding box.
+
+  Returns:
+    tuple: xmin, xmax, ymin, ymax, zmin, zmax; 3D bounding box
+  """
+  try:
+    X = np.squeeze(X, axis=0)
+  except ValueError:
+    pass  # axis 0 is not single-dimensional
+  # Clear possible interpolation artifacts around actual brain.
+  mask = X != bg_value
+  # X = X * np.abs(X) > 0.0001
+  out = []
+  for ax in ((1, 2), (0, 2), (0, 1)):
+    collapsed_mask = np.any(mask, axis=ax)
+
+    vmin, vmax = np.where(collapsed_mask)[0][[0, -1]]
+    max_size = collapsed_mask.shape[0]
+    size = vmax - vmin
+    # FIXME: if size % patch_multiplicity == 0, this adds innecesary size.
+    new_size = size + (patch_multiplicity - size % patch_multiplicity)
+    diff = new_size - size
+    # Expand the box to enforce multiplicity, without exceeding the [0, max_size) interval.
+    new_vmin = max(0, min(vmin - diff // 2, max_size - new_size))
+    new_vmax = min(max_size, new_vmin + new_size)
+    out.extend([new_vmin, new_vmax])
+  return tuple(out)
 
 
 def generate_cuboid_centered(cuboid_shape, volume_shape, center_voxel):
@@ -125,3 +173,7 @@ def get_dataset_savedir(dataset, loss=None):
   if loss is not None and loss != 'sparse_categorical_crossentropy':
     savedir += '_' + (loss if isinstance(loss, str) else loss.__name__)
   return savedir
+
+def ensure_dir(directory):
+  if not os.path.exists(directory):
+    os.makedirs(directory)

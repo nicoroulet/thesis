@@ -5,6 +5,7 @@ import os
 import Metrics
 import Tools
 import Logger
+import Tools
 
 import numpy as np
 import fractions
@@ -14,7 +15,7 @@ import functools
 
 import keras
 from keras.layers import Input, Conv3D, Conv3DTranspose, MaxPooling3D, \
-                         Add, Dropout, BatchNormalization
+                         Add, Dropout, BatchNormalization, Activation
 from keras.models import Model
 from keras.callbacks import ModelCheckpoint
 
@@ -54,10 +55,10 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
       'strides': (1, 1, 1),
       'padding': 'same',  # TODO: consider 'valid' (no padding),
                           # as suggested by paper.
-      'activation': 'relu',
+      # 'activation': 'relu',
       # TODO: experiment with regularizers and initializers.
       'kernel_initializer': 'he_normal',
-      'kernel_regularizer': keras.regularizers.l2(.0001)
+      'kernel_regularizer': keras.regularizers.l2(.005)
   }
 
   inputs = Input((None, None, None, n_channels))
@@ -74,16 +75,22 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
     # x = Dropout(.1)(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
     x = BatchNormalization()(x)
+    x = Activation('relu')(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
     x = BatchNormalization()(x)
+    x = Activation('relu')(x)
     layer_outputs.append(x)
     x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     n_filters *= 2
 
   # Bottom layers
-  x = Dropout(.3)(x)
+  x = Dropout(0.3)(x)
   x = Conv3D(filters=n_filters, **conv_params)(x)
+  x = BatchNormalization()(x)
+  x = Activation('relu')(x)
   x = Conv3D(filters=n_filters, **conv_params)(x)
+  x = BatchNormalization()(x)
+  x = Activation('relu')(x)
 
   # Transposed Convolution layers (up-convolution)
   for layer in reversed(range(depth - 1)):
@@ -95,8 +102,10 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
     # x = concatenate([x, layer_outputs.pop()])
     x = Conv3D(filters=n_filters, **conv_params)(x)
     x = BatchNormalization()(x)
+    x = Activation('relu')(x)
     x = Conv3D(filters=n_filters, **conv_params)(x)
     x = BatchNormalization()(x)
+    x = Activation('relu')(x)
 
   # Final layer
   x = Conv3D(filters=n_classes,
@@ -110,7 +119,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
 class UNet(Model):
   """UNet model, taken from https://arxiv.org/abs/1505.04597."""
 
-  def __init__(self, n_classes, depth=4, base_filters=32, n_channels=1):
+  def __init__(self, n_classes, depth=4, base_filters=16, n_channels=1):
     """Create UNet model.
 
     Args:
@@ -141,17 +150,17 @@ class UNet(Model):
         steps (int): number of images to evaluate
 
     Yields:
-        tuple: (ground truth, prediction), both categorically encoded.
+        tuple: (ground truth, prediction), both segmentations categorically encoded.
 
     """
     for (i, (x, y)) in zip(range(steps), generator):
-      xmin, xmax, ymin, ymax, zmin, zmax = generator.get_bounding_box(x)
+      xmin, xmax, ymin, ymax, zmin, zmax = Tools.get_bounding_box(x, generator.patch_multiplicity)
       x_cropped = x[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
       y_pred_cropped = self.predict(x_cropped)
       y = np.squeeze(y, axis=-1)
       y_pred = np.zeros_like(y)
       y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = np.argmax(y_pred_cropped, axis=-1)
-      yield y, y_pred
+      yield x, y, y_pred
 
 
 class MultiUNet:
@@ -208,14 +217,13 @@ class MultiUNet:
       self.nets[name].compile(
                               # loss=Metrics.continuous.dice_loss,
                               loss='sparse_categorical_crossentropy',
-                              optimizer='adam',
+                              optimizer=keras.optimizers.Adam(lr=0.0003),#'adam',
                               metrics=['accuracy',
                                        Metrics.dice_coef,
                                        Metrics.mean_dice_coef])
 
       savedir = Tools.get_dataset_savedir(dataset, loss)
-      if not os.path.exists(savedir):
-        os.mkdir(savedir)
+      Tools.ensure_dir(savedir)
       savefile = savedir + "/best_weights.h5"
       secondary_savefile = savedir + "/weights.h5"
       if os.path.exists(savefile):
@@ -348,18 +356,18 @@ class MultiUNet:
         modalities (list, optional): list of modalities for on the given generator.
 
     Yields:
-        tuple: (y_true, y_pred), ground truth and predicted labels.
+        tuple: (y_true, y_pred) - ground truth and predicted labels.
 
     """
     for i, (x, y_true) in zip(range(steps), generator):
 
-      xmin, xmax, ymin, ymax, zmin, zmax = generator.get_bounding_box(x)
+      xmin, xmax, ymin, ymax, zmin, zmax = Tools.get_bounding_box(x, generator.patch_multiplicity)
       x_cropped = x[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
       y_pred_cropped = self.predict(x_cropped, modalities)
       y_true = np.squeeze(y_true, axis=-1)
       y_pred = np.zeros_like(y_true)
       y_pred[:, xmin:xmax, ymin:ymax, zmin:zmax] = y_pred_cropped
-      yield y_true, y_pred
+      yield x, y_true, y_pred
 
   @property
   def patch_multiplicity(self):

@@ -6,8 +6,9 @@ from keras.callbacks import Callback, TensorBoard
 
 import numpy as np
 import os
-
 import tensorflow as tf
+
+import Tools
 
 # from medpy.metrics.binary import
 
@@ -129,6 +130,12 @@ def mean_dice_loss(y_true, y_pred):
   return 1 - mean_dice_coef(y_true, y_pred)
 
 
+def discrete_mean_dice_coef(y_true, y_pred):
+  n_classes = K.int_shape(y_pred)[-1]
+  y_pred = K.one_hot(K.argmax(y_pred), n_classes)
+  return mean_dice_coef(y_true, y_pred)
+
+
 def selective_dice_coef(y_true, y_pred):
   """Metric that computes the averaged one-versus-all dice coefficient over present labels.
 
@@ -145,10 +152,9 @@ def selective_dice_coef(y_true, y_pred):
 
   """
   y_pred_shape = K.shape(y_pred)
-  print(y_pred_shape)
-
   n_labels = y_pred_shape[-1]
   batch_size = y_pred_shape[0]
+
   y_true = K.reshape(y_true, (batch_size, -1, 1))
   y_pred = K.reshape(y_pred, (batch_size, -1, n_labels))[..., 1:]  # Drops bg scores.
 
@@ -160,18 +166,22 @@ def selective_dice_coef(y_true, y_pred):
   # labels_mask = labels_mask * K.cast(K.not_equal(labels_mask, 0), 'float32')
   negative_mask = 1 - positive_mask
   # True Positive: sum of correct scores assigned to positive labels
+  # tp[i, j] stores the true positive score of patch i on label j.
   tp = K.sum(y_pred * positive_mask, axis=1)
   # False Positive: sum of positive scores assigned to negative labels
+  # fp[i, j] stores the false positive score of patch i on label j.
   fp = K.sum(y_pred * negative_mask, axis=1)
   # False Negative: sum of negative scores assigned to positive label
   # This assumes that the sum of scores is 1 (output from softmax)
+  # fn[i, j] stores the false negative score of patch i on label j.
   fn = K.sum((1 - y_pred) * positive_mask, axis=1)
 
   nums = 2 * tp
-  dens = nums + fp + fn + 1e-5
+  dens = nums + fp + fn + K.epsilon()
+  # coefs[i, j] stores the dice score of patch i on label j.
   coefs = (nums / dens) * labels_mask
 
-  means = K.sum(coefs, axis=1) / (K.sum(labels_mask, axis=1) + 1e-5)
+  means = K.sum(coefs, axis=1) / (K.sum(labels_mask, axis=1) + K.epsilon())
   return K.mean(means)
 
 
@@ -229,11 +239,49 @@ def selective_sparse_categorical_crossentropy(y_true, y_pred):
   # not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
   ignore_mask = K.cast(K.equal(y_true, -1), 'float32')
   ignore_mask = K.repeat_elements(ignore_mask, n_classes - 1, -1)
-  ignored_fp = K.mean(-K.mean(ignore_mask * K.log(1 - y_pred), axis=1) * labels_mask)
+  ignored_fp = K.mean(-K.sum(ignore_mask * K.log(1 - y_pred), axis=1) * labels_mask)
 
   # good_scores = K.print_tensor(good_scores, message='good scores = ')
   # bad_scores = K.print_tensor(bad_scores, message='bad scores = ')
   loss = (crossentropy + ignored_fp)
+  return loss
+
+def variant_selective_sparse_categorical_crossentropy(y_true, y_pred):
+  n_classes = K.int_shape(y_pred)[-1]
+  y_pred = K.clip(y_pred, K.epsilon(), 1 - K.epsilon())
+  y_pred_log = K.log(y_pred)
+  not_ignore_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
+  crossentropy = -K.sum(not_ignore_mask * y_pred_log)
+
+  batch_size = K.shape(y_pred)[0]
+  y_true = K.reshape(y_true, (batch_size, -1, 1))
+
+  n_elems = K.shape(y_true)[1]
+  # y_pred shape: batch_size x n_voxels x n_classes
+  y_pred = K.reshape(y_pred, (batch_size, -1, n_classes))
+
+  # positive_mask shape: batch_size x n_voxels x n_classes
+  positive_mask = K.one_hot(K.squeeze(K.cast(y_true, 'int32'), axis=-1), n_classes)
+
+  # labels_mask shape: batch_size x n_classes
+  # labels_mask[i, j] stores whether the ground truth patch i contains label j.
+  labels_mask = K.cast(K.any(positive_mask, axis=1), 'float32')
+  # labels_mask = K.print_tensor(labels_mask, message='labels_mask = ')
+  labels_mask = K.expand_dims(labels_mask, 1)
+  # labels_mask = K.repeat_elements(K.expand_dims(labels_mask, 1), n_elems, -1)
+
+  # ignore_mask shape: batch_size x x n_voxels x n_classes
+  ignore_mask = K.cast(K.equal(y_true, -1), 'float32')
+  ignore_mask = K.squeeze(ignore_mask, axis=-1)
+  # ignore_mask = K.repeat_elements(ignore_mask, n_classes, -1)
+  # ignored_fp = -K.sum(K.log(1 - K.sum(labels_mask * y_pred, axis=-1)) * ignore_mask)
+  ignored_fp = K.clip(1 - K.sum(labels_mask * y_pred, axis=-1), 0.1, 1)
+  # ignored_fp = K.print_tensor(ignored_fp, message='bad scores = ')
+  ignored_fp = -K.sum(K.log(ignored_fp + K.epsilon()) * ignore_mask)
+
+  # crossentropy = K.print_tensor(crossentropy, message='good scores = ')
+  # ignored_fp = K.print_tensor(ignored_fp, message='bad scores = ')
+  loss = (crossentropy + ignored_fp) / K.cast(n_elems, 'float32')
   return loss
 
 
@@ -326,53 +374,56 @@ class DiscreteMetrics:
   #   """Dice loss, same as dice coefficient but decreasing."""
   #   return 1 - DiscreteMetrics.dice_coef(y_true, y_pred)
 
-  @staticmethod
-  def mean_dice_coef(n_classes, ignore_background=True, verbose=False):
-    """Metric that computes the averaged one-versus-all dice coefficient.
+  # y_true is in sparse notation (one category number per voxel), while
+  # y_pred is in categorical notation (a probability distribution for each voxel)
 
-    The coefficient between two labelings is computed by averaging the dice
-    coefficient of each label against the rest.
+  # @staticmethod
+  # def mean_dice_coef(n_classes, ignore_background=True, verbose=False):
+  #   """Metric that computes the averaged one-versus-all dice coefficient.
 
-    Args:
-        n_classes: number of possible distinct labels.
-        ignore_background: if True, dice for the background label (0) is not
-                           averaged.
-    """
-    def _mean_dice_coef(y_true, y_pred):
-      # y_true is in sparse notation (one category number per voxel)
-      # y_pred is in sparse notation
-      labels = range(ignore_background, n_classes)
-      n_labels = n_classes - ignore_background
-      mean = 0
-      for label in labels:
-        # label is the positive label.
-        true_mask = K.cast(K.equal(y_true, label), 'float')
-        pred_mask = K.cast(K.equal(y_pred, label), 'float')
+  #   The coefficient between two labelings is computed by averaging the dice
+  #   coefficient of each label against the rest.
 
-        tp = K.sum(true_mask * pred_mask)
-        fp = K.sum((1 - true_mask) * pred_mask)
-        fn = K.sum(true_mask * (1 - pred_mask))
-        if verbose:
-          tp = K.print_tensor(tp, message='tp = ')
-          fp = K.print_tensor(fp, message='fp = ')
-          fn = K.print_tensor(fn, message='fn = ')
-        num = 2 * tp
-        den = num + fp + fn + 1e-4
-        coef = num / den
+  #   Args:
+  #       n_classes: number of possible distinct labels.
+  #       ignore_background: if True, dice for the background label (0) is not
+  #                          averaged.
+  #   """
+  #   def _mean_dice_coef(y_true, y_pred):
+  #     # y_true is in sparse notation (one category number per voxel)
+  #     # y_pred is in sparse notation
+  #     labels = range(ignore_background, n_classes)
+  #     n_labels = n_classes - ignore_background
+  #     mean = 0
+  #     for label in labels:
+  #       # label is the positive label.
+  #       true_mask = K.cast(K.equal(y_true, label), 'float')
+  #       pred_mask = K.cast(K.equal(y_pred, label), 'float')
 
-        mean += coef
-      mean *= 1 / n_labels
-      return mean
+  #       tp = K.sum(true_mask * pred_mask)
+  #       fp = K.sum((1 - true_mask) * pred_mask)
+  #       fn = K.sum(true_mask * (1 - pred_mask))
+  #       if verbose:
+  #         tp = K.print_tensor(tp, message='tp = ')
+  #         fp = K.print_tensor(fp, message='fp = ')
+  #         fn = K.print_tensor(fn, message='fn = ')
+  #       num = 2 * tp
+  #       den = num + fp + fn + 1e-4
+  #       coef = num / den
 
-    return _mean_dice_coef
+  #       mean += coef
+  #     mean *= 1 / n_labels
+  #     return mean
 
-  @staticmethod
-  def mean_dice_loss(n_classes, ignore_background=True):
-    """Mean dice loss, same as mean dice coefficient but decreasing."""
-    def _mean_dice_loss(y_true, y_pred):
-      return 1 - DiscreteMetrics.mean_dice_coef(n_classes, ignore_background)(y_true, y_pred)
+  #   return _mean_dice_coef
 
-    return _mean_dice_loss
+  # @staticmethod
+  # def mean_dice_loss(n_classes, ignore_background=True):
+  #   """Mean dice loss, same as mean dice coefficient but decreasing."""
+  #   def _mean_dice_loss(y_true, y_pred):
+  #     return 1 - DiscreteMetrics.mean_dice_coef(n_classes, ignore_background)(y_true, y_pred)
+
+  #   return _mean_dice_loss
 
 
 ################################################################################
@@ -531,7 +582,8 @@ class FullVolumeValidationCallback(Callback):
       for i in range(self.steps):
         # Evaluate model in full volume.
         X, Y = next(self.generators[key])
-        xmin, xmax, ymin, ymax, zmin, zmax = self.generators[key].get_bounding_box(X)
+        xmin, xmax, ymin, ymax, zmin, zmax = Tools.get_bounding_box(X,
+                                                                 generators[key].patch_multiplicity)
         X_cropped = X[:, xmin:xmax, ymin:ymax, zmin:zmax, :]
         Y_pred_cropped = self.validation_model.predict(X_cropped)
         Y = np.squeeze(Y, axis=-1)

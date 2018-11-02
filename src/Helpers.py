@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as anim
 
 import Logger
+import Tools
 
 
 def write_gif(img3d, filename, fps=24):
@@ -55,20 +56,27 @@ class TimelinePool:
       self.timelines[new_label] = self.timelines.pop(label)
 
 
-def visualize_predictions(x, y_true, y_pred, savefile=''):
-  Logger.debug('Visualizing predictions')
+def save_predictions(x, y_true, y_pred, savefile):
+  Logger.info('Saving predictions to', savefile)
+  assert (y_true.shape == y_pred.shape), 'Wrong true and pred shapes %s and %s' % (str(y_true.shape), str(y_pred.shape))
+
+  import nibabel as nib
+  savefile = '../visualizations/' + savefile
+  savedir = '/'.join(savefile.split('/')[:-1])
+  Tools.ensure_dir(savedir)
+
+  Logger.debug("Shapes: prediction -", y_pred.shape, "ground truth -", y_true.shape, "image -", x.shape)
+  Logger.info("Saving ground truth to", savefile + '_truth.nii.gz')
+  nib.save(nib.Nifti1Image(y_true, np.eye(4)), savefile + '_truth.nii.gz')
+  Logger.info("Saving prediction to", savefile + '_pred.nii.gz')
+  nib.save(nib.Nifti1Image(y_pred.astype('int8'), np.eye(4)), savefile + '_pred.nii.gz')
+  Logger.info("Saving image to", savefile + '_img.nii.gz')
+  nib.save(nib.Nifti1Image(x, np.eye(4)), savefile + '_img.nii.gz')
+
+
+def visualize_predictions(x, y_true, y_pred):
+  Logger.info('Saving predictions to', savefile)
   assert(y_true.shape == y_pred.shape)
-
-  if savefile:
-    import nibabel as nib
-    Logger.debug("Shapes: prediction -", y_pred.shape, "ground truth -", y_true.shape, "image -", x.shape)
-    Logger.info("Saving ground truth to", savefile + '_truth.nii.gz')
-    nib.save(nib.Nifti1Image(y_true, np.eye(4)), savefile + '_truth.nii.gz')
-    Logger.info("Saving prediction to", savefile + '_pred.nii.gz')
-    nib.save(nib.Nifti1Image(y_pred.astype('int8'), np.eye(4)), savefile + '_pred.nii.gz')
-    Logger.info("Saving image to", savefile + '_img.nii.gz')
-    nib.save(nib.Nifti1Image(x, np.eye(4)), savefile + '_img.nii.gz')
-
   minl = int(min(np.min(y_true), np.min(y_pred)))
   maxl = int(max(np.max(y_true), np.max(y_pred)))
   ax = plt.subplot(121)

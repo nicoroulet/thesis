@@ -4,6 +4,7 @@ TODO: add description of each.
 """
 
 import Tools
+import Logger
 
 import itertools
 import numpy as np
@@ -48,13 +49,20 @@ class FetcherThread(threading.Thread):
                        (data, segmentation), both as numpy arrays.
       paths: the list of paths to all elements of the dataset.
       queue: the queue where the data is stored.
+      infinite: if True, then paths are infinitely iterated in a random way.
+                if False, then paths are iterated only once, sorted lexicographically.
     """
     super(FetcherThread, self).__init__()
     self.loader_function = loader_function
+    self.paths = sorted(paths)
     if infinite:
-      self.paths = itertools.cycle(paths)
+      # self.paths = itertools.cycle(paths)
+      # Infinite generator of random choices of paths. `iter(int, 1)` is an infinite iterable
+      self.paths_iter = (random.choice(self.paths) for _ in iter(int, 1))
     else:
-      self.paths = iter(paths)
+      Logger.debug('Paths', self.paths)
+      # Note: this behaviour is assumed by Experiment.py::validate_unet
+      self.paths_iter = iter(self.paths)
     self.queue = queue
     self.daemon = True
 
@@ -62,7 +70,7 @@ class FetcherThread(threading.Thread):
     """Thread execution routine."""
     while (True):
       try:
-        self.queue.put(self.loader_function(next(self.paths)))
+        self.queue.put(self.loader_function(next(self.paths_iter)))
       except StopIteration:
         break
 
@@ -79,7 +87,8 @@ class BatchGenerator:
                transformations=Transformations.ALL,
                patch_multiplicity=1,
                batch_size=5,
-               infinite=True):
+               infinite=True,
+               sample_bg=True):
     """Initialize the thread that fetches objects in the queue.
 
     Args:
@@ -107,16 +116,22 @@ class BatchGenerator:
     self.patch_multiplicity = patch_multiplicity
     self.patch_generator = self.generate_patches()
     self.batch_size = batch_size
-    self.bboxes = [self.get_bounding_box(self.pool[0][0])]
+    self.bboxes = [Tools.get_bounding_box(self.pool[0][0], self.patch_multiplicity)]
+    self.label_maps = [Tools.get_label_index(self.pool[0][1], self.bboxes[0])]
+    self.ignore_bg = not sample_bg
 
-  def crop(self, X, Y, bbox):
+  @property
+  def paths(self):
+    return self.thread.paths
+
+  def crop(self, X, Y, bbox, label_index):
     """Crop a patch from image and segmentation volumes.
 
     If cropping is enabled in `self.transformations`, then a voxel of a random
     segmentation label is chosen and a box of patch_size around it is cropped
     from the data and segmentation.
-    Otherwise, the original data and segmentation are returned, only enforcing
-    the the multiplicity set in `self.patch_multiplicity`.
+    Otherwise, the original data and segmentation are returned. `self.patch_multiplicity` is not
+    enforced, it should be enforced in the bounding box.
 
     Args:
         X (numpy array): data
@@ -126,21 +141,21 @@ class BatchGenerator:
         TYPE: Description
     """
     if self.transformations & Transformations.CROP:
-      contained_voxel = Tools.get_voxel_of_rand_label(Y, bbox)
+      contained_voxel = Tools.get_voxel_of_rand_label(Y, bbox, label_index, ignore_bg=self.ignore_bg)
       x1, x2, y1, y2, z1, z2 = Tools.generate_cuboid_containing(
                                 self.patch_shape, X.shape[:-1], contained_voxel)
       return (X[x1:x2, y1:y2, z1:z2, :],
               Y[x1:x2, y1:y2, z1:z2, :])
-    if self.patch_multiplicity > 1:
-      whd = np.array(X.shape[:-1]).astype('int32')
-      whd_cropped = (whd // self.patch_multiplicity) * self.patch_multiplicity
-      xyz1 = (whd - whd_cropped) // 2
-      xyz2 = xyz1 + whd_cropped
-      x1, y1, z1 = xyz1
-      x2, y2, z2 = xyz2
-      # print(x1, x2, y1, y2, z1, z2)
-      return (X[x1:x2, y1:y2, z1:z2, :],
-              Y[x1:x2, y1:y2, z1:z2, :])
+    # if self.patch_multiplicity > 1:
+    #   whd = np.array(X.shape[:-1]).astype('int32')
+    #   whd_cropped = (whd // self.patch_multiplicity) * self.patch_multiplicity
+    #   xyz1 = (whd - whd_cropped) // 2
+    #   xyz2 = xyz1 + whd_cropped
+    #   x1, y1, z1 = xyz1
+    #   x2, y2, z2 = xyz2
+    #   # print(x1, x2, y1, y2, z1, z2)
+    #   return (X[x1:x2, y1:y2, z1:z2, :],
+    #           Y[x1:x2, y1:y2, z1:z2, :])
     return X, Y
 
   def add_gaussian_noise(self, patch, sigma=.01):
@@ -172,43 +187,6 @@ class BatchGenerator:
       X[:] = np.flip(X, axis=0)
       Y[:] = np.flip(Y, axis=0)
     return patch
-
-  def get_bounding_box(self, X):
-    """Get the bounding box of an image.
-
-    The bounding box is the smallest box that contains all nonzero elements of
-    the volume. The multiplicity defined by the generator is enforced by
-    enlarging the box if needed.
-
-    Args:
-        X (numpy array): image volume from which to calculate the box
-
-    Returns:
-        tuple: xmin, xmax, ymin, ymax, zmin, zmax; 3D bounding box
-    """
-    try:
-      X = np.squeeze(X, axis=0)
-    except ValueError:
-      pass  # axis 0 is not single-dimensional
-    # Clear possible interpolation artifacts around actual brain.
-    mask = X != Tools.bg_value
-    # X = X * np.abs(X) > 0.0001
-    out = []
-    for ax in ((1, 2), (0, 2), (0, 1)):
-      collapsed_mask = np.any(mask, axis=ax)
-
-      vmin, vmax = np.where(collapsed_mask)[0][[0, -1]]
-      max_size = collapsed_mask.shape[0]
-      size = vmax - vmin
-      # FIXME: if size % patch_multiplicity == 0, this adds innecesary size.
-      new_size = size + (self.patch_multiplicity -
-                         size % self.patch_multiplicity)
-      diff = new_size - size
-      # Expand the box to enforce multiplicity, without exceeding the [0, max_size) interval.
-      new_vmin = max(0, min(vmin - diff // 2, max_size - new_size))
-      new_vmax = min(max_size, new_vmin + new_size)
-      out.extend([new_vmin, new_vmax])
-    return tuple(out)
 
   def __next__(self):
     """Generate a batch of given size.
@@ -246,15 +224,17 @@ class BatchGenerator:
         X, Y = self.pool[i]
         yield self.maybe_flip(
                 self.add_gaussian_noise(
-                    self.crop(X, Y, self.bboxes[i])))
+                    self.crop(X, Y, self.bboxes[i], self.label_maps[i])))
       # Replace one element from the pool
       try:
         if len(self.pool) < self.pool_size:
           self.pool.append(self.queue.get(timeout=5))
-          self.bboxes.append(self.get_bounding_box(self.pool[-1][0]))
+          self.bboxes.append(Tools.get_bounding_box(self.pool[-1][0], self.patch_multiplicity))
+          self.label_maps.append(Tools.get_label_index(self.pool[-1][1], self.bboxes[-1]))
         else:
           self.pool[idx] = self.queue.get(timeout=5)
-          self.bboxes[idx] = self.get_bounding_box(self.pool[idx][0])
+          self.bboxes[idx] = Tools.get_bounding_box(self.pool[idx][0], self.patch_multiplicity)
+          self.label_maps[idx] = Tools.get_label_index(self.pool[idx][1], self.bboxes[idx])
           idx = next(self.cycle)
         self.queue.task_done()
       except queue.Empty:  # On timeout, the queue is assumed to be depleted.

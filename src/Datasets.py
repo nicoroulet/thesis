@@ -13,6 +13,7 @@ from nilearn.image import resample_img
 
 from BatchGenerator import BatchGenerator, Transformations
 import Tools
+import Logger
 
 
 def normalize(X, roi=None):
@@ -50,7 +51,7 @@ def resample_to_1mm(img, interpolation='continuous'):
   return resample_img(img, target_affine=np.eye(3), interpolation=interpolation)
 
 
-def intersect_and_resample(path1, path2, interpolation1='continuous', interpolation2='continuous'):
+def resample_and_intersect(path1, path2, interpolation1='continuous', interpolation2='continuous'):
   """Take two images that resampled to 1mm3 have different sizes and crop the intersections."""
   img1 = resample_img(nib.load(path1), target_affine=np.eye(3), interpolation=interpolation1)
   img2 = resample_img(nib.load(path2), target_affine=np.eye(3), interpolation=interpolation2)
@@ -61,6 +62,14 @@ def intersect_and_resample(path1, path2, interpolation1='continuous', interpolat
   img1_crop = img1.get_fdata()[max(0, x2-x1):, max(0, y2-y1):, max(0, z2-z1):]
   img2_crop = img2.get_fdata()[max(0, x1-x2):, max(0, y1-y2):, max(0, z1-z2):]
 
+  try:
+    img2_crop = np.squeeze(img2_crop, -1)
+  except ValueError:
+    pass
+  try:
+    img1_crop = np.squeeze(img1_crop, -1)
+  except ValueError:
+    pass
   w1, h1, d1 = img1_crop.shape
   w2, h2, d2 = img2_crop.shape
   w, h, d = min(w1, w2), min(h1, h2), min(d1, d2)
@@ -87,27 +96,28 @@ def preprocess_dataset(dataset, root_dir):
   """Take a dataset and stores it into memory as plain numpy arrays.
 
   Args:
-      dataset: input dataste
+      dataset: input dataset
       root_dir (string): directory to store dataset
   """
   root_dir += dataset.name + '/'
   import os
 
-  if not os.path.exists(root_dir):
-    os.makedirs(root_dir)
+  Tools.ensure_dir(savedir)
 
   # Shuffle paths in order to guarrantee that training/validation portions are
   # random and not determined by some arbitrary property like file names.
   # Note that when loading the dataset, the partition will not be random, only
   # when preprocessing it.
   paths = dataset.train_paths + dataset.val_paths
+  paths.sort()
+  np.random.seed(123)
   np.random.shuffle(paths)
 
-  print('Preprocessing dataset %s' % dataset.name)
-  print(paths)
+  Logger.info('Preprocessing dataset %s' % dataset.name)
+  Logger.debug(paths)
   for i, path in enumerate(paths):
     save_path = root_dir + '/%d' % i
-    print('Processing path: %s' % path)
+    Logger.info('Processing path: %s' % path)
     data, seg = dataset.load_path(path)
 
     if data.shape[:-1] != seg.shape[:-1]:
@@ -153,7 +163,8 @@ class Dataset:
                           pool_refresh_period=20,
                           transformations=Transformations.ALL,
                           patch_multiplicity=1,
-                          batch_size=5):
+                          batch_size=5,
+                          sample_bg=False):
     return BatchGenerator(patch_shape,
                           self.train_paths,
                           self.load_path,
@@ -162,17 +173,19 @@ class Dataset:
                           pool_refresh_period=pool_refresh_period,
                           transformations=transformations,
                           patch_multiplicity=patch_multiplicity,
-                          batch_size=batch_size)
+                          batch_size=batch_size,
+                          sample_bg=sample_bg)
 
   def get_val_generator(self,
                         patch_shape=None,
-                        max_queue_size=4,
+                        max_queue_size=1,
                         pool_size=1,
                         pool_refresh_period=1,
                         transformations=Transformations.NONE,
                         patch_multiplicity=1,
                         batch_size=1,
-                        infinite=True):
+                        infinite=True,
+                        sample_bg=False):
     return BatchGenerator(patch_shape,
                           self.val_paths,
                           self.load_path,
@@ -182,9 +195,10 @@ class Dataset:
                           transformations=transformations,
                           patch_multiplicity=patch_multiplicity,
                           batch_size=batch_size,
-                          infinite=infinite)
+                          infinite=infinite,
+                          sample_bg=sample_bg)
 
-  def get_patch_generators(self, patch_shape, batch_size=5):
+  def get_patch_generators(self, patch_shape, batch_size=5, sample_train_bg=True):
     """Get both training generator and validation patched batch generators.
 
     Both crop patches from the images. The training generator also applies
@@ -197,13 +211,15 @@ class Dataset:
         tuple: `train_generator`, `val_generator`.
     """
     return (self.get_train_generator(patch_shape=patch_shape,
-                                     batch_size=batch_size),
+                                     batch_size=batch_size,
+                                     sample_bg=sample_train_bg),
             self.get_val_generator(patch_shape=(128, 128, 128),
                                    max_queue_size=3,
                                    pool_size=5,
-                                   pool_refresh_period=20,
+                                   pool_refresh_period=5,
                                    transformations=Transformations.CROP,
-                                   batch_size=1))
+                                   batch_size=1,
+                                   sample_bg=False))
 
   def get_full_volume_generators(self, patch_multiplicity=1, infinite=True):
     """Get both training generator and validation full volume batch generators.
@@ -255,7 +271,25 @@ class NumpyDataset(Dataset):
     return data, seg
 
   def _get_paths(self, root_path):
-    return glob(root_path + '*.npz')
+    paths = glob(root_path + '*.npz')
+    if not paths:
+      Logger.error('dataset %s is empty' % self.name)
+    return paths
+
+
+class DummyDataset(NumpyDataset):
+  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains13/',
+                 validation_portion=.5):
+    super(DummyDataset, self).__init__(root_path, validation_portion)
+
+  def _get_paths(self, root_path):
+    return glob(root_path + '0.npz') + glob(root_path + '1.npz')
+
+  classes = ['background', 'csf', 'gray matter', 'white matter']
+
+  modalities = ['t1', 'ir', 'flair']
+
+  name = 'dummy'
 
 
 class ATLAS(NumpyDataset):
@@ -348,7 +382,7 @@ class TumorSim(NumpyDataset):
       6 Vessels.
 
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/tumorsim/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/tumorsim_noisy/',
                validation_portion=.2):
     super(TumorSim, self).__init__(root_path, validation_portion)
 
@@ -366,9 +400,9 @@ class MRBrainS13(NumpyDataset):
     1 Cerebrospinal fluid (including ventricles)
     2 Gray matter (cortical gray matter and basal ganglia)
     3 White matter (including white matter lesions)
-    0 Everyting else
+    0 Everything else
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains13/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/smooth/mrbrains13/',
                validation_portion=.2):
     super(MRBrainS13, self).__init__(root_path, validation_portion)
 
@@ -376,7 +410,7 @@ class MRBrainS13(NumpyDataset):
 
   modalities = ['t1', 'ir', 'flair']
 
-  name = 'mrbrains13'
+  name = 'mrbrains13_smooth'
 
 
 class IBSR(NumpyDataset):
@@ -386,9 +420,9 @@ class IBSR(NumpyDataset):
     1 Cerebrospinal fluid (including ventricles)
     2 Gray matter (cortical gray matter and basal ganglia)
     3 White matter (including white matter lesions)
-    0 Everyting else
+    0 Everything else
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/ibsr/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/smooth/ibsr/',
                validation_portion=.2):
     super(IBSR, self).__init__(root_path, validation_portion)
 
@@ -396,7 +430,7 @@ class IBSR(NumpyDataset):
 
   modalities = ['t1']
 
-  name = 'ibsr'
+  name = 'ibsr_smooth'
 
 
 class MRBrainS17(NumpyDataset):
@@ -432,7 +466,7 @@ class MRBrainS18(NumpyDataset):
       -1 Ignore.
   'Ignore' groups Cerebellum, Brain Stem, Infarction and Other.
   """
-  def __init__(self, root_path='../../data/preprocessed_datasets/mrbrains18/',
+  def __init__(self, root_path='../../data/preprocessed_datasets/smooth/mrbrains18/',
                validation_portion=.2):
     super(MRBrainS18, self).__init__(root_path, validation_portion)
 
@@ -440,7 +474,7 @@ class MRBrainS18(NumpyDataset):
 
   modalities = ['t1', 'flair', 'ir']
 
-  name = 'mrbrains18'
+  name = 'mrbrains18_smooth'
 
 
 # -------------------------------- Raw Datasets ----------------------------------------------------
@@ -509,11 +543,10 @@ class RawBraTS12(Dataset):
     data = np.stack([normalize(datum, roi=brainmask)
                      for datum in [t1, t1c, t2, flair]], axis=-1)
 
-    seg_path = self._get_seg_paths(path)
-    assert(len(seg_path) == 1)
-    seg_path = seg_path[0]
+    seg_path, = self._get_seg_paths(path)
     seg = resample_to_1mm(nib.load(seg_path),
                           interpolation='nearest').get_data()
+    seg *= brainmask
     seg = seg.reshape(seg.shape + (1,)).astype('int8')
     assert(seg.size)
     return (data, seg)
@@ -558,11 +591,10 @@ class RawBraTS17(Dataset):
     data = [normalize(datum, roi=(np.abs(datum) > 0.0001)) for datum in data]
     data = np.stack(data, axis=-1)
 
-    seg_path = self._get_seg_paths(path)
-    assert(len(seg_path) == 1)
-    seg_path = seg_path[0]
+    seg_path, = self._get_seg_paths(path)
     seg = resample_to_1mm(nib.load(seg_path),
                           interpolation='nearest').get_data()
+    seg *= brainmask
     seg = seg.reshape(seg.shape + (1,)).astype('int8')
     assert(seg.size)
     return (data, seg)
@@ -596,36 +628,45 @@ class RawMRBrainS13(Dataset):
     1 Cerebrospinal fluid (including ventricles)
     2 Gray matter (cortical gray matter and basal ganglia)
     3 White matter (including white matter lesions)
-    0 Everyting else
+    0 Everything else
   """
   def __init__(self, root_path='../../data/MRBrainS13DataNii/',
                validation_portion=.2):
     super(RawMRBrainS13, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
-    data_path = self._get_data_path(path)
-    t1 = resample_to_1mm(nib.load(data_path[0])).get_fdata()
-    ir = resample_to_1mm(nib.load(data_path[1])).get_fdata()
-    flair = resample_to_1mm(nib.load(data_path[2])).get_fdata()
-    brainmask = resample_to_1mm(nib.load(data_path[3]), interpolation='nearest').get_fdata()
+    subpaths = self._get_subpaths(path)
+    t1, seg = resample_and_intersect(subpaths['t1'], subpaths['seg'], interpolation2='nearest')
+    ir, seg = resample_and_intersect(subpaths['ir'], subpaths['seg'], interpolation2='nearest')
+    flair, seg = resample_and_intersect(subpaths['flair'], subpaths['seg'], interpolation2='nearest')
+    brainmask, seg = resample_and_intersect(subpaths['brainmask'], subpaths['seg'], interpolation2='nearest')
+    brainmask = brainmask.astype('int8')
+    seg = seg.astype('int8')
+
+    # t1 = resample_to_1mm(nib.load(data_path[0])).get_fdata()
+    # ir = resample_to_1mm(nib.load(data_path[1])).get_fdata()
+    # flair = resample_to_1mm(nib.load(data_path[2])).get_fdata()
+    # brainmask = resample_to_1mm(nib.load(data_path[3]), interpolation='nearest').get_fdata().astype('int8')
 
     data = np.stack([normalize(t1, roi=brainmask),
                      normalize(ir, roi=brainmask),
                      normalize(flair, roi=brainmask)], axis=-1).astype('float32')
 
-    seg_path = self._get_seg_paths(path)
-    assert(len(seg_path) == 1)
-    seg_path = seg_path[0]
-    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_data().astype('int8')
+    # seg_path, = self._get_seg_paths(path)
+    # seg = nib.load(seg_path).get_data().astype('int8')
+    # seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_data().astype('int8')
+    seg *= brainmask
     seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
-  def _get_data_path(self, path):
-    data_path = [glob(path + '/T1.nii')[0],
-                 glob(path + '/T1_IR.nii')[0],
-                 glob(path + '/T2_FLAIR.nii')[0]
-,                glob(path + '/brainmask.nii.gz')[0]]
-    return data_path
+  def _get_subpaths(self, path):
+    subpaths = {}
+    subpaths['t1'], = glob(path + '/T1.nii')
+    subpaths['ir'], = glob(path + '/T1_IR.nii')
+    subpaths['flair'], = glob(path + '/T2_FLAIR.nii')
+    subpaths['brainmask'], = glob(path + '/brainmask.nii.gz')
+    subpaths['seg'], = glob(path + '/LabelsForTesting_preproc.nii')
+    return subpaths
 
   def _get_seg_paths(self, path):
     # LabelsForTraining.nii contains addidional labels, LabelsForTesting.nii
@@ -639,7 +680,7 @@ class RawMRBrainS13(Dataset):
 
   modalities = ['t1', 'ir', 'flair']
 
-  name = 'mrbrains13'
+  name = 'mrbrains13_smooth'
 
 
 class RawIBSR(Dataset):
@@ -649,7 +690,7 @@ class RawIBSR(Dataset):
     1 Cerebrospinal fluid (including ventricles)
     2 Gray matter (cortical gray matter and basal ganglia)
     3 White matter (including white matter lesions)
-    0 Everyting else
+    0 Everything else
   """
 
   def __init__(self, root_path='../../data/IBSR_nifti_stripped/',
@@ -657,26 +698,35 @@ class RawIBSR(Dataset):
     super(RawIBSR, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
-    data_path = self._get_data_path(path)
-    data = resample_to_1mm(nib.load(data_path[0])).get_fdata().astype('float32')
+    subpaths = self._get_subpaths(path)
 
-    brainmask = resample_to_1mm(nib.load(data_path[1]), interpolation='nearest').get_fdata()
-    data = normalize(data, roi=brainmask)
+    t1, seg = resample_and_intersect(subpaths['t1'], subpaths['seg'], interpolation2='nearest')
+    brainmask, seg = resample_and_intersect(subpaths['brainmask'], subpaths['seg'], interpolation2='nearest')
+    brainmask = np.round(brainmask).astype('int8')
+    seg = seg.astype('int8')
+    # t1 = resample_to_1mm(nib.load(subpaths['t1'])).get_fdata().astype('float32')
 
-    seg_path = self._get_seg_paths(path)
-    assert(len(seg_path) == 1)
-    seg_path = seg_path[0]
-    seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_fdata().astype('int8')
+    # brainmask = resample_to_1mm(nib.load(subpaths['brainmask']), interpolation='nearest').get_fdata().astype('int8')
+    data = np.stack([normalize(t1, roi=brainmask)], axis=-1)
+
+    # seg_path, = subpaths['seg']
+    # seg = resample_to_1mm(nib.load(seg_path), interpolation='nearest').get_fdata().astype('int8')
+    seg *= brainmask
+    seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
-  def _get_data_path(self, path):
+  def _get_subpaths(self, path):
     # The first data path is the image, the second the brainmask.
-    data_path = [glob(path + '/*ana_strip.nii.gz')[0],
-                 glob(path + '/*brainmask.nii.gz')[0]]
-    return data_path
+    subpaths = {}
+    subpaths['t1'], = glob(path + '/*ana_strip.nii.gz')
+    subpaths['brainmask'], = glob(path + '/*brainmask.nii.gz')
+    subpaths['seg'], = glob(path + '/*segTRI_fill_ana_preproc.nii.gz')
+    # data_path = [glob(path + '/*ana_strip.nii.gz')[0],
+    #              glob(path + '/*brainmask.nii.gz')[0]]
+    return subpaths
 
   def _get_seg_paths(self, path):
-    return glob(path + '/*segTRI_fill_ana.nii.gz')
+    return glob(path + '/*segTRI_fill_ana_preproc.nii.gz')
 
   def _get_paths(self, root_path):
     return glob(root_path + '/IBSR*')
@@ -685,7 +735,7 @@ class RawIBSR(Dataset):
 
   modalities = ['t1']
 
-  name = 'ibsr'
+  name = 'ibsr_smooth'
 
 
 class RawMRBrainS17(Dataset):
@@ -706,7 +756,7 @@ class RawMRBrainS17(Dataset):
     t1 = resample_to_1mm(nib.load(data_path[1])).get_fdata().astype('float32')
     flair = resample_to_1mm(nib.load(data_path[2])).get_fdata().astype('float32')
 
-    brainmask = resample_to_1mm(nib.load(data_path[0]), interpolation='nearest').get_fdata()
+    brainmask = resample_to_1mm(nib.load(data_path[0]), interpolation='nearest').get_fdata().astype('int8')
 
     data = np.stack([normalize(t1, roi=brainmask),
                      normalize(flair, roi=brainmask)], axis=-1)
@@ -715,9 +765,10 @@ class RawMRBrainS17(Dataset):
     seg = nib.load(seg_path)
     seg.affine[np.abs(seg.affine) < .000001] = 0
     seg = resample_to_1mm(seg, interpolation='nearest').get_data().astype('int8')
-    seg = seg.reshape(seg.shape + (1,))
     # Merge label 'other pathology' with background.
     seg[seg == 2] = 0
+    seg *= brainmask
+    seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
   def _get_data_path(self, path):
@@ -736,7 +787,7 @@ class RawMRBrainS17(Dataset):
 
   modalities = ['t1', 'flair']
 
-  name = 'mrbrains17'
+  name = 'mrbrains17_smooth'
 
 
 class RawMRBrainS18(Dataset):
@@ -759,49 +810,54 @@ class RawMRBrainS18(Dataset):
     super(RawMRBrainS18, self).__init__(root_path, validation_portion)
 
   def load_path(self, path):
-    data_paths = self._get_data_path(path)
-    t1 = resample_to_1mm(nib.load(data_paths[1])).get_fdata().astype('float32')
-    ir = resample_to_1mm(nib.load(data_paths[2])).get_fdata().astype('float32')
-    flair = resample_to_1mm(nib.load(data_paths[3])).get_fdata().astype('float32')
+    subpaths = self._get_subpaths(path)
+    t1, seg = resample_and_intersect(subpaths['t1'], subpaths['seg'], interpolation2='nearest')
+    ir, seg = resample_and_intersect(subpaths['ir'], subpaths['seg'], interpolation2='nearest')
+    flair, seg = resample_and_intersect(subpaths['flair'], subpaths['seg'], interpolation2='nearest')
+    # t1 = resample_to_1mm(nib.load(data_paths['t1'])).get_fdata().astype('float32')
+    # ir = resample_to_1mm(nib.load(data_paths['ir'])).get_fdata().astype('float32')
+    # flair = resample_to_1mm(nib.load(data_paths['flair'])).get_fdata().astype('float32')
 
-    brainmask = resample_to_1mm(nib.load(data_paths[0]), interpolation='nearest').get_fdata()
-
+    brainmask, seg = resample_and_intersect(subpaths['brainmask'], subpaths['seg'], interpolation2='nearest')
+    # brainmask = resample_to_1mm(nib.load(data_paths['brainmask']), interpolation='nearest').get_fdata().astype('int8')
+    brainmask = brainmask.astype('int8')
+    seg = seg.astype('int8')
     data = np.stack([normalize(t1, roi=brainmask),
                      normalize(flair, roi=brainmask),
                      normalize(ir, roi=brainmask)],
                      axis=-1)
 
-    seg_path = self._get_seg_path(path)
-    seg = nib.load(seg_path)
-    seg.affine[np.abs(seg.affine) < .000001] = 0
-    seg = resample_to_1mm(seg, interpolation='nearest').get_data().astype('int8')
-    seg = seg.reshape(seg.shape + (1,))
+    # seg = nib.load(seg_path)
+    # seg.affine[np.abs(seg.affine) < .000001] = 0
+    # seg = resample_to_1mm(seg, interpolation='nearest').get_data().astype('int8')
     # Unify 1 and 2 as gray matter; 5 and 6 as CSF; 7, 8, 9, 10 as Ignore.
-    # Note: this sends Cerebellum, Brain Stem, Infarction and Other to background. This makes the
+    # Note: this sends Cerebellum, Brain Stem, Infarction and Other to -1. This makes the
     # dataset unfit for training, but it's fine for validation with Dice, because those sections
     # will be ignored.
     # 1, 2 -> 3
     # 3 -> 4
     # 4 -> 1
     # 5, 6 -> 2
-    # 7, 8, 9, 10 -> 5
+    # 7, 8, 9, 10 -> -1
     seg[seg >= 7] = -1
     seg[seg == 1] = 2
     seg[seg == 4] = 1
     seg[seg == 3] = 4
     seg[seg == 2] = 3
     seg[seg >= 5] = 2
+    seg *= brainmask
+    seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
-  def _get_data_path(self, path):
-    data_path = [glob(path + '/pre/reg_brainmask.nii.gz')[0],
-                 glob(path + '/pre/reg_T1.nii.gz')[0],
-                 glob(path + '/pre/reg_IR.nii.gz')[0],
-                 glob(path + '/pre/FLAIR.nii.gz')[0]]
-    return data_path
+  def _get_subpaths(self, path):
+    subpaths = {}
 
-  def _get_seg_path(self, path):
-    return glob(path + '/segm.nii.gz')[0]
+    subpaths['brainmask'], = glob(path + '/pre/reg_brainmask.nii.gz')
+    subpaths['t1'], = glob(path + '/pre/reg_T1.nii.gz')
+    subpaths['ir'], = glob(path + '/pre/reg_IR.nii.gz')
+    subpaths['flair'], = glob(path + '/pre/FLAIR.nii.gz')
+    subpaths['seg'], = glob(path + '/segm_preproc.nii.gz')
+    return subpaths
 
   def _get_paths(self, root_path):
     return glob(root_path + '/*/')
@@ -810,7 +866,7 @@ class RawMRBrainS18(Dataset):
 
   modalities = ['t1', 'flair', 'ir']
 
-  name = 'mrbrains18'
+  name = 'mrbrains18_smooth'
 
 
 class RawBrainWeb(Dataset):
@@ -829,16 +885,18 @@ class RawBrainWeb(Dataset):
 
   def load_path(self, path):
     subpaths = self._get_subpaths(path)
-    t1, seg = intersect_and_resample(subpaths['t1'], subpaths['seg'], interpolation2='nearest')
-    _, brainmask = intersect_and_resample(subpaths['seg'], subpaths['brainmask'])
+    t1, seg = resample_and_intersect(subpaths['t1'], subpaths['seg'], interpolation2='nearest')
+    _, brainmask = resample_and_intersect(subpaths['seg'], subpaths['brainmask'])
+    brainmask = brainmask.astype('int8')
+    seg = seg.astype('int8')
     # t1 = load_resampled(subpaths['t1'])
     # brainmask = load_resampled(subpaths['brainmask'], interpolation='nearest')
 
     data = np.stack([normalize(t1, roi=brainmask)], axis=-1)
 
+    seg = (seg * brainmask).reshape(seg.shape + (1,))
     # _, seg = intersect_and_resample(subpaths['t1'], subpaths['seg'])
     # seg = load_resampled(subpaths['seg'], interpolation='nearest').astype('int8')
-    seg = (seg * brainmask).reshape(seg.shape + (1,)).astype('int8')
     # Original labels are (in order): Background, CSF, Grey Matter, White Matter, Fat, Muscle,
     # Muscle / Skin, Skull, Vessels, Connective, Dura, Marrow.
     # Wanted labels are: Background, CSF, Grey Matter, White Matter, Vessels
@@ -848,7 +906,6 @@ class RawBrainWeb(Dataset):
     return (data, seg)
 
   def _get_subpaths(self, path):
-    print(path)
     (t1,) = glob(path + '/*t1w*.mnc.gz')
     (brainmask,) = glob(path + '/brainmask.nii.gz')
     (seg,) = glob(path + '/*crisp*.mnc.gz')
@@ -867,7 +924,7 @@ class RawBrainWeb(Dataset):
 
 
 class RawTumorSim(Dataset):
-  """BrainWeb synthetic anatomic dataset (last 15 subjects).
+  """TumorSim simulations on first 5 BrainWeb subjects.
 
   Labels:
       0 Background.
@@ -879,7 +936,7 @@ class RawTumorSim(Dataset):
       6 Vessels.
 
   """
-  def __init__(self, root_path='../../data/TumorSim/',
+  def __init__(self, root_path='../../data/TumorSimLowNoise/',
                validation_portion=.2):
     super(RawTumorSim, self).__init__(root_path, validation_portion)
 
@@ -890,11 +947,10 @@ class RawTumorSim(Dataset):
     t2 = load_resampled(subpaths['t2'])
     flair = load_resampled(subpaths['flair'])
     brainmask = load_resampled(subpaths['t1'], interpolation='nearest') > 20
-    data = np.stack([normalize(datum, roi=brainmask)
+    data = np.stack([normalize(datum, roi=brainmask) # + np.random.normal(0, 0.2, datum.shape) * brainmask
                      for datum in [t1, t1c, t2, flair]], axis=-1)
 
     seg = load_resampled(subpaths['seg'], interpolation='nearest') * brainmask
-    seg = seg.reshape(seg.shape + (1,))
     assert(seg.size)
 
     # Original labels are (in order): Background, White Matter, Grey Matter, CSF, Edema, Tumor,
@@ -908,6 +964,8 @@ class RawTumorSim(Dataset):
     # seg[seg == 5] = 6
     # seg[seg == 4] = 5
     # seg[seg == 7] = 4
+    seg *= brainmask
+    seg = seg.reshape(seg.shape + (1,))
     return (data, seg)
 
   def _get_subpaths(self, path):
@@ -960,6 +1018,7 @@ class MultiDataset(NumpyDataset):
 
     """
     self.datasets = datasets
+    self.name = '_'.join(dataset.name for dataset in datasets)
     # self.val_dataset = val_dataset
     self.ignore_backgrounds = ignore_backgrounds
     self.balance = balance
@@ -976,7 +1035,6 @@ class MultiDataset(NumpyDataset):
     self.modalities = list(set.intersection(*[set(dataset.modalities) for dataset in datasets]))
     assert(self.modalities), "Given datasets don't have intersecting modalities"
     self.classes = ['background'] + [clss for dataset in datasets for clss in dataset.classes[1:]]
-    self.name = '_'.join(dataset.name for dataset in datasets)
     # if balance != 'datasets':
     #   self.name += '_' + balance
 
@@ -1047,12 +1105,10 @@ class MultiDataset(NumpyDataset):
 
 
 if __name__ == '__main__':
-  # preprocess_dataset(RawMRBrainS13(), '../../data/preprocessed_datasets/')
-  # preprocess_dataset(RawATLAS(), '../../data/preprocessed_datasets/')
-  # preprocess_dataset(RawBraTS17(), '../../data/preprocessed_datasets/')
-  # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawMRBrainS13(), '../../data/preprocessed_datasets/smooth/')
+  # preprocess_dataset(RawIBSR(), '../../data/preprocessed_datasets/smooth/')
   # preprocess_dataset(RawMRBrainS17(), '../../data/preprocessed_datasets/')
-  # preprocess_dataset(RawMRBrainS18(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawMRBrainS18(), '../../data/preprocessed_datasets/smooth/')
   # preprocess_dataset(RawBraTS12(), '../../data/preprocessed_datasets/')
-  preprocess_dataset(RawBrainWeb(), '../../data/preprocessed_datasets/')
+  # preprocess_dataset(RawBrainWeb(), '../../data/preprocessed_datasets/')
   preprocess_dataset(RawTumorSim(), '../../data/preprocessed_datasets/')
