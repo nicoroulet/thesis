@@ -38,7 +38,7 @@ brats12_ignore_bg_brainweb = Datasets.MultiDataset([brats12, brainweb],
 
 mrbrains13 = Datasets.MRBrainS13()
 mrbrains13_val = Datasets.MRBrainS13(validation_portion=1)
-ibsr = Datasets.IBSR()
+ibsr = Datasets.IBSR(validation_portion=0.4)
 mrbrains17 = Datasets.MRBrainS17()
 mrbrains18 = Datasets.MRBrainS18(validation_portion=1)
 mrbrains17_ibsr = Datasets.MultiDataset([mrbrains17, ibsr])
@@ -127,8 +127,8 @@ def train_unet(dataset, epochs=1, steps_per_epoch=200, batch_size=7,
 
 
   model.compile(loss=loss,
-                optimizer='adam',
-                # optimizer=keras.optimizers.Adam(lr=0.0002),
+                # optimizer='adam',
+                optimizer=keras.optimizers.Adam(lr=0.0002),
                 metrics=[sparse_categorical_accuracy,
                          Metrics.discrete_mean_dice_coef
                          ])
@@ -433,20 +433,20 @@ if __name__ == '__main__':
   "----------------------------------------- BraTS12 ----------------------------------------------"
   Tools.set_model_subdir('singletask_metrics/brats12')
 
-  # train_unet(brats12, epochs=10)
-  # train_unet(brats12, epochs=10, loss=Metrics.mean_dice_loss)
-  # train_unet(brats12, epochs=10, loss=Metrics.selective_dice_loss)
-  # train_unet(brats12, epochs=10, loss=Metrics.variant_selective_sparse_categorical_crossentropy)
+  # train_unet(brats12, epochs=20)
+  # train_unet(brats12, epochs=20, loss=Metrics.mean_dice_loss)
+  # train_unet(brats12, epochs=20, loss=Metrics.selective_dice_loss)
+  # train_unet(brats12, epochs=20, loss=Metrics.variant_selective_sparse_categorical_crossentropy)
 
   # validate_unet(brats12, tag='Entropia cruzada')
   # validate_unet(brats12, loss=Metrics.mean_dice_loss, tag='Dice')
   # validate_unet(brats12, loss=Metrics.selective_dice_loss, tag="Dice selectivo")
   # validate_unet(brats12, loss=Metrics.variant_selective_sparse_categorical_crossentropy, tag="Entropia cruzada selectiva")
 
-  # visualize_unet(brats12, savefile='single_net/brats12/brats12_crossentropy', skip=3)
-  # visualize_unet(brats12, loss=Metrics.mean_dice_loss, savefile='single_net/brats12/brats12_dice', skip=3)
-  # visualize_unet(brats12, loss=Metrics.selective_dice_loss, savefile='single_net/brats12/brats12_selective_dice', skip=3)
-  # visualize_unet(brats12, loss=Metrics.variant_selective_sparse_categorical_crossentropy, savefile='single_net/brats12/brats12_selective_crossentropy', skip=3)
+  # visualize_unet(brats12, savefile='single_net/brats12/brats12_crossentropy', skip=4)
+  # visualize_unet(brats12, loss=Metrics.mean_dice_loss, savefile='single_net/brats12/brats12_dice', skip=4)
+  # visualize_unet(brats12, loss=Metrics.selective_dice_loss, savefile='single_net/brats12/brats12_selective_dice', skip=4)
+  # visualize_unet(brats12, loss=Metrics.variant_selective_sparse_categorical_crossentropy, savefile='single_net/brats12/brats12_selective_crossentropy', skip=4)
 
   "---------------------------------- BraTS BrainWeb TumorSim -------------------------------------"
   Tools.set_model_subdir('multitask_metrics/tumors')
@@ -498,8 +498,8 @@ if __name__ == '__main__':
   # visualize_unet(brats12_brainweb, tumorsim, loss=Metrics.variant_selective_sparse_categorical_crossentropy, savefile='tumors/brats12_brainweb_selective_crossentropy')
 
   ## Visualize on training datasets
-  # visualize_unet(brats12_brainweb, brainweb, savefile='tumors/brats12_brainweb_on_brainweb_crossentropy')
-  # visualize_unet(brats12_brainweb, brats12, savefile='tumors/brats12_brainweb_on_brats12_crossentropy')
+  # visualize_unet(brats12_brainweb, brainweb, savefile='tumors/brats12_brainweb_on_brainweb_crossentropy', skip=1)
+  visualize_unet(brats12_brainweb, brats12, savefile='tumors/brats12_brainweb_on_brats12_crossentropy', skip=3)
   # visualize_unet(brats12_brainweb, brainweb, loss=Metrics.mean_dice_loss, savefile='wmh/brats12_brainweb_on_brainweb_dice')
   # visualize_unet(brats12_brainweb, brats12, loss=Metrics.mean_dice_loss, savefile='wmh/brats12_brainweb_on_brats12_dice')
 
@@ -531,14 +531,22 @@ if __name__ == '__main__':
 
 
   "--------------------------------- IBSR ---------------------------------------------------------"
-  # train_unet(ibsr, epochs=50)
-  # train_unet(ibsr, epochs=100, loss=Metrics.selective_dice_loss)
-  # train_unet(ibsr, epochs=50, loss=Metrics.mean_dice_loss)
+  Tools.set_model_subdir('singletask_metrics/ibsr_more_val')
+  # Tools.set_model_subdir('smooth_metrics')
+  # train_unet(ibsr, epochs=20)
+  # train_unet(ibsr, epochs=20, loss=Metrics.mean_dice_loss)
+  # train_unet(ibsr, epochs=20, loss=Metrics.selective_dice_loss)
+  # train_unet(ibsr, epochs=20, loss=Metrics.variant_selective_sparse_categorical_crossentropy)
 
-  # validate_unet(ibsr, tag='Single task')
-  # validate_unet(ibsr, loss=Metrics.selective_dice_loss)
-  # validate_unet(ibsr, loss=Metrics.mean_dice_loss)
-  # validate_unet(ibsr, mrbrains13_val)
+  # validate_unet(ibsr, tag='Entropia cruzada')
+  # validate_unet(ibsr, loss=Metrics.mean_dice_loss, tag='Dice')
+  # validate_unet(ibsr, loss=Metrics.selective_dice_loss, tag='Dice selectivo')
+  # validate_unet(ibsr, loss=Metrics.variant_selective_sparse_categorical_crossentropy, tag='Entropia cruzada selectiva')
+
+  # visualize_unet(ibsr, savefile='single_net/ibsr_more_val/ibsr_crossentropy')
+  # visualize_unet(ibsr, loss=Metrics.mean_dice_loss, savefile='single_net/ibsr_more_val/ibsr_dice')
+  # visualize_unet(ibsr, loss=Metrics.selective_dice_loss, savefile='single_net/ibsr_more_val/ibsr_selective_dice')
+  # visualize_unet(ibsr, loss=Metrics.variant_selective_sparse_categorical_crossentropy, savefile='single_net/ibsr_more_val/ibsr_selective_crossentropy')
 
   # visualize_unet(ibsr)
 
@@ -644,6 +652,8 @@ if __name__ == '__main__':
   # Visualize on training datasets
   # visualize_unet(mrbrains17_13, mrbrains13, savefile='wmh/mrbrains17_13_on_mr13_crossentropy')
   # visualize_unet(mrbrains17_13, mrbrains17, savefile='wmh/mrbrains17_13_on_mr17_crossentropy')
+  # visualize_unet(mrbrains17_13, mrbrains13, loss=Metrics.mean_dice_loss, savefile='wmh/mrbrains17_13_on_mr13_dice')
+  # visualize_unet(mrbrains17_13, mrbrains17, loss=Metrics.mean_dice_loss, savefile='wmh/mrbrains17_13_on_mr17_dice')
 
   # Tools.set_model_subdir('final_metrics')
   # visualize_unet(mrbrains13, mrbrains18, savefile='mrbrains13_on_mrbrains18')
