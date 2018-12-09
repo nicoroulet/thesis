@@ -119,7 +119,7 @@ def build_unet(n_classes, depth=4, base_filters=32, n_channels=1):
 class UNet(Model):
   """UNet model, taken from https://arxiv.org/abs/1505.04597."""
 
-  def __init__(self, n_classes, depth=4, base_filters=16, n_channels=1):
+  def __init__(self, n_classes, depth=4, base_filters=32, n_channels=1):
     """Create UNet model.
 
     Args:
